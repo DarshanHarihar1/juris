@@ -1,0 +1,179 @@
+{
+  "version": 1,
+  "skills": {
+    "ponytail": {
+      "source": "DietrichGebert/ponytail",
+      "sourceType": "github",
+      "skillPath": "skills/ponytail/SKILL.md",
+      "computedHash": "4503a9dba2dca5836469a104c90e0c32ae9cb8bb97d02806e6fa06d15ceed56a"
+    },
+    "ponytail-audit": {
+      "source": "DietrichGebert/ponytail",
+      "sourceType": "github",
+      "skillPath": "skills/ponytail-audit/SKILL.md",
+      "computedHash": "8b8d72e6ff70b65b6c9518d470fcf29dc696eea93d28f3efa10fdcc60cbd696d"
+    },
+    "ponytail-debt": {
+      "source": "DietrichGebert/ponytail",
+      "sourceType": "github",
+      "skillPath": "skills/ponytail-debt/SKILL.md",
+      "computedHash": "0099b82174e3a4261828b4ec04d2c068b1b294fdab14f76701c2acd1f7c99539"
+    },
+    "ponytail-gain": {
+      "source": "DietrichGebert/ponytail",
+      "sourceType": "github",
+      "skillPath": "skills/ponytail-gain/SKILL.md",
+      "computedHash": "c45ecba7906960eea904218b623abf097ebff84ecbacca6d68da1d0687435f75"
+    },
+    "ponytail-help": {
+      "source": "DietrichGebert/ponytail",
+      "sourceType": "github",
+      "skillPath": "skills/ponytail-help/SKILL.md",
+      "computedHash": "10e8382b1033c9a0fec0073de6d3de3846b4f5dca7d78b6df2d476a1f4cd43c6"
+    },
+    "ponytail-review": {
+      "source": "DietrichGebert/ponytail",
+      "sourceType": "github",
+      "skillPath": "skills/ponytail-review/SKILL.md",
+      "computedHash": "4646594fcd75455533f7ff1425f4f1c5ba0fa65f88241bf262b1c4fc275f049a"
+    },
+    "render-background-workers": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-background-workers/SKILL.md",
+      "computedHash": "71ce2c7a840a4591ae0f2f6dfa64fbfa51a4312540d16ce0c6506cd1eeb0f9b1"
+    },
+    "render-blueprints": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-blueprints/SKILL.md",
+      "computedHash": "d836cbc7cc11b366aedabcac74c6e589b504d3e705cf9d3b4837a029dac52372"
+    },
+    "render-cli": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-cli/SKILL.md",
+      "computedHash": "f4c8fe13f48ddc919a7ae6aafca9ccad6f16e4aa886e4455db9ce58692604acd"
+    },
+    "render-cron-jobs": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-cron-jobs/SKILL.md",
+      "computedHash": "2164b648e09566a29cdb4c8bab1c7defb16d02154d2c75e266c38d955f00707a"
+    },
+    "render-debug": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-debug/SKILL.md",
+      "computedHash": "428019d37475c18a35957201f4d8368778400f923cfa3d497dc8e16808e2740f"
+    },
+    "render-deploy": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-deploy/SKILL.md",
+      "computedHash": "746656aaafd8953098bf43d4bc3ca3fddcec64d2f60850aa480bbca4cb515763"
+    },
+    "render-disks": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-disks/SKILL.md",
+      "computedHash": "37ff04d1c8ae828f518d02a5de6615be5aa4ca986103cefd7a50bd9378e26c1b"
+    },
+    "render-docker": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-docker/SKILL.md",
+      "computedHash": "6abf8ea443dec8b3b01c3d5a99ff445bd42cd81a0fe5e98ba2e5e1f88b9285f8"
+    },
+    "render-domains": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-domains/SKILL.md",
+      "computedHash": "b8eb89eb4ae24aa77438cb350c62c15cae7d3b086b4357665963ee7eeef5a7d2"
+    },
+    "render-env-vars": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-env-vars/SKILL.md",
+      "computedHash": "a9f42bbe5543aae3dddec192bd160c0b325dc52d135d938cd23ab3b706deb533"
+    },
+    "render-keyvalue": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-keyvalue/SKILL.md",
+      "computedHash": "ad5e434ef3a4f2dbb60b313b2879807931ec9225a5571326aa932d66bb3244c8"
+    },
+    "render-mcp": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-mcp/SKILL.md",
+      "computedHash": "edd12986f57bb9d33cd29548c24aa52bea1d2197b081a9acbdf59fbbd07f92da"
+    },
+    "render-migrate-from-heroku": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-migrate-from-heroku/SKILL.md",
+      "computedHash": "5377251d7ec232c330bbcbf11b770be0cc36daa2ed2bcf57b6f285b0ba63b669"
+    },
+    "render-monitor": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-monitor/SKILL.md",
+      "computedHash": "27cbea38101a2dfe913b7dd7486763becb4ce34d121ec1571608eb06f04b8f79"
+    },
+    "render-networking": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-networking/SKILL.md",
+      "computedHash": "00d1ded4873a1ae165fd43dac0f7de3e43883211b17733d996bbdf3fecf5aba9"
+    },
+    "render-postgres": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-postgres/SKILL.md",
+      "computedHash": "033eb9b918801287a899357ddb6398c36d4d9ec19b2631107049c94fe8f40fd9"
+    },
+    "render-private-services": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-private-services/SKILL.md",
+      "computedHash": "6869378ec8f8db15c1452c9b8ec01b336154e0641983b3790334ef7342b9b4ca"
+    },
+    "render-scaling": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-scaling/SKILL.md",
+      "computedHash": "f093419486f98522b8be96e19cdbad3b4f7abda9e0ce346afd0a8fe8329b5832"
+    },
+    "render-static-sites": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-static-sites/SKILL.md",
+      "computedHash": "1ea39d11151fc0ba2129bc7f5bb7302f3ad45a821a55950a04e70b9456c1983c"
+    },
+    "render-web-services": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-web-services/SKILL.md",
+      "computedHash": "56a3f63c7a9fb8848316da647f2ddcf80380ea3823ad53cfb52716ff293fcd1a"
+    },
+    "render-workflows": {
+      "source": "render-oss/skills",
+      "sourceType": "github",
+      "skillPath": "skills/render-workflows/SKILL.md",
+      "computedHash": "a022162ff43b56f7c3a8579476b02287fc3b66d79371e7f4a69bb0da6c5923b5"
+    },
+    "supabase": {
+      "source": "supabase/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/supabase/SKILL.md",
+      "computedHash": "d414d598b9428b3e851c4ce61898649906b19e55aa7415bb42a286bd9ca2ab32"
+    },
+    "supabase-postgres-best-practices": {
+      "source": "supabase/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/supabase-postgres-best-practices/SKILL.md",
+      "computedHash": "0d2c4857a7d6fdcd3fbc46e458fa4c497f029cab89a01548b3defce203003932"
+    }
+  }
+}

@@ -1,0 +1,99 @@
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+.env.*.private
+
+# NOTE: DO NOT IGNORE:
+# - .mcp.json (MCP server configuration with env var references)
+# - skills-lock.json (skill dependency lockfile, like package-lock.json)
+# - .claude/settings.local.json (Claude Code project config)
+# These should be committed as they're project configuration, not secrets
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node/NPM
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# Local development
+.cache/
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.workspace
+
+# Claude Code / Agent cache
+.claude/plugins/cache/
+.claude/settings.local.json
+.claude/.cache/
+
+# Token saving cache (local optimization)
+.tokensave/
+
+# IDE specific files
+.vscode/launch.json
+.vscode/extensions.json
+.idea/workspace.xml
+.idea/shelf/
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+.eslintcache
+.stylelintcache
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*~
+.#*
+
+# Logs
+logs/
+*.log
+lerna-debug.log*
+
+# Production/Deploy artifacts
+.vercel/
+.netlify/
+dist-prod/
+
+design/

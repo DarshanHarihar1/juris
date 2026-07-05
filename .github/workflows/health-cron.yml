@@ -1,0 +1,17 @@
+# Daily ping to /health — keeps the Supabase free tier from auto-pausing
+# (pauses after 7 days idle) and warms the Render web service.
+# Set repo secret HEALTH_URL to the Render web URL, e.g. https://juris-web.onrender.com/health
+name: health-cron
+on:
+  schedule:
+    - cron: "0 6 * * *"   # daily 06:00 UTC
+  workflow_dispatch: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: curl /health
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 90 "${{ secrets.HEALTH_URL }}")
+          echo "HTTP $code"
+          test "$code" = "200"

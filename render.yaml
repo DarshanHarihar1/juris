@@ -1,0 +1,32 @@
+# Render Blueprint — Juris backend: Web Service (FastAPI) + Background Worker.
+# Both auto-deploy on push to main. Set NIM_API_KEY and DATABASE_URL in the
+# Render dashboard (sync: false = secret, entered once per service).
+services:
+  - type: web
+    name: juris-web
+    runtime: python
+    plan: free                       # switch to starter ($7) for demo day (no cold start)
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NIM_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+
+  - type: worker
+    name: juris-worker
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.worker
+    autoDeploy: true
+    envVars:
+      - key: NIM_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
