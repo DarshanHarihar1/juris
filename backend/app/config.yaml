@@ -1,7 +1,7 @@
 # config.yaml — role→model matrix + thresholds. All models via NVIDIA NIM.
 # IDs are real NIM catalog IDs; re-pin from build.nvidia.com/models at build time.
 roles:
-  embeddings:   { model: baai/bge-m3, dims: 1024 }              # multilingual, strong on Indic
+  embeddings:   { model: nvidia/nv-embedqa-e5-v5, dims: 1024 }  # 1024-dim; baai/bge-m3 500s on NIM. We embed the English text_norm pivot, so English-centric is fine.
   normalizer:   { model: meta/llama-3.1-8b-instruct, temp: 0.0 }
   investigators:                       # 2 DIFFERENT families (MVP), run in parallel
     - { model: meta/llama-3.3-70b-instruct,      tools: [web_search, factcheck_search, numeric_check] }

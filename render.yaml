@@ -16,6 +16,10 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: GOOGLE_FACTCHECK_API_KEY
+        sync: false
+      - key: SEARXNG_URL              # internal URL of the private searxng service
+        fromService: { name: juris-searxng, type: pserv, property: hostport }
 
   - type: worker
     name: juris-worker
@@ -30,3 +34,17 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: GOOGLE_FACTCHECK_API_KEY
+        sync: false
+      - key: SEARXNG_URL
+        fromService: { name: juris-searxng, type: pserv, property: hostport }
+
+  # Private meta-search (backend-only). OSS, zero per-query cost (LLD §1/§13).
+  - type: pserv
+    name: juris-searxng
+    runtime: image
+    plan: free
+    image: { url: searxng/searxng:latest }
+    envVars:
+      - key: SEARXNG_SETTINGS__SEARCH__FORMATS   # enable JSON output for the wrapper
+        value: '["html","json"]'

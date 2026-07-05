@@ -1,9 +1,9 @@
-"""Stage machine (LLD §3.2 event protocol). Phase 1 wires S0→S1:
-intake → normalize → persist claims → emit stage/claim events. Zero-claim guard
-ends the job with a terminal "nothing to verify". S2→S6 append in later phases."""
+"""Stage machine (LLD §3.2 event protocol). Wires S0→S2:
+intake → normalize → persist+embed claims → precedent short-circuit (cache/human
+fact-check). Zero-claim guard ends the job. S3→S6 append in later phases."""
 from ..db import pool
-from ..services import events
-from . import s0_intake, s1_normalize
+from ..services import events, nim
+from . import s0_intake, s1_normalize, s2_precedent
 
 
 async def run(job: dict) -> None:
@@ -38,13 +38,23 @@ async def run(job: dict) -> None:
             })
             return
 
-        for nc in norm.claims:
+        embeddings = await nim.embed([nc.text_norm for nc in norm.claims])
+        for nc, emb in zip(norm.claims, embeddings):
             claim_id = await con.fetchval(
-                """insert into claims (submission_id, text_original, text_norm, text_norm_native, claim_type)
-                   values ($1, $2, $3, $4, $5) returning id""",
-                submission_id, text, nc.text_norm, nc.text_norm_native, nc.claim_type,
+                """insert into claims (submission_id, text_original, text_norm, text_norm_native, claim_type, embedding)
+                   values ($1, $2, $3, $4, $5, $6::vector) returning id""",
+                submission_id, text, nc.text_norm, nc.text_norm_native, nc.claim_type, s2_precedent.vec(emb),
             )
             await events.emit(job_id, "claim", {
                 "claim_id": str(claim_id), "text_norm": nc.text_norm, "claim_type": nc.claim_type,
             })
-    # S2 precedent → S6 synthesis land in later phases.
+
+            # S2 — precedent short-circuit (cache / human fact-check)
+            await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "started"})
+            sc = await s2_precedent.check(con, claim_id, emb, nc.text_norm)
+            if sc:
+                await events.emit(job_id, "verdict", {"claim_id": str(claim_id), **sc})
+            else:
+                await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "miss",
+                                                    "claim_id": str(claim_id)})
+    # S3 investigation → S6 synthesis land in later phases (S2 misses escalate there).

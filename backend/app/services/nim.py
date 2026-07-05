@@ -87,9 +87,14 @@ async def call(
         return _wrap(resp, fallback)
 
 
-async def embed(texts: list[str]) -> list[list[float]]:
-    """Embeddings via NIM (baai/bge-m3, 1024-dim) — matches claims.embedding vector(1024)."""
+async def embed(texts: list[str], input_type: str = "query") -> list[list[float]]:
+    """Embeddings via NIM (1024-dim, matches claims.embedding vector(1024)). NVIDIA
+    embed NIMs require input_type ("query"/"passage") + truncate. We use "query" for
+    both store and lookup so claim-vs-claim cache similarity stays symmetric."""
     emb_role = cfg()["roles"]["embeddings"]
     async with _sem:
-        resp = await _get_client().embeddings.create(model=emb_role["model"], input=texts)
+        resp = await _get_client().embeddings.create(
+            model=emb_role["model"], input=texts,
+            extra_body={"input_type": input_type, "truncate": "END"},
+        )
     return [d.embedding for d in resp.data]
