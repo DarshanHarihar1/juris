@@ -1,22 +1,20 @@
-"""Background worker — polls the jobs queue and processes claimed jobs.
-Phase 0: the "process" step just emits events + marks done, proving the
-enqueue → claim → events round-trip. Pipeline stages S0→S6 plug in here later."""
+"""Background worker — polls the jobs queue and runs the pipeline on claimed jobs.
+Phase 1: process() runs the orchestrator (S0→S1) then marks the job done.
+Later stages (S2→S6) extend the orchestrator, not this loop."""
 import asyncio
 import logging
 
 from . import db
-from .services import events, jobs
+from .pipeline import orchestrator
+from .services import jobs
 
 log = logging.getLogger("juris.worker")
 POLL_INTERVAL = 2.0  # seconds between empty-queue polls
 
 
 async def process(job: dict) -> None:
-    job_id = job["id"]
-    await events.emit(job_id, "stage", {"stage": "S0_INTAKE", "status": "started"})
-    # ponytail: no pipeline yet (Phase 1+). Just close the loop.
-    await events.emit(job_id, "stage", {"stage": "S0_INTAKE", "status": "done"})
-    await jobs.mark_done(job_id)
+    await orchestrator.run(job)
+    await jobs.mark_done(job["id"])
 
 
 async def run(max_idle_polls: int | None = None) -> None:
