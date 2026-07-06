@@ -67,3 +67,41 @@ class Ruling(BaseModel):
     confidence: float                   # 0–1
     decisive_evidence_ids: list[str] = []
     reasoning: str = ""
+
+
+# --- S6 synthesis / VerdictCard (LLD §4.5, §5-S6) -------------------------------
+MANIPULATION_TAGS = frozenset({
+    "fake-urgency", "authority-impersonation", "old-media-new-context",
+    "numeric-truth-effect", "fabricated-quote", "emotional-priming",
+    "fake-forward-chain", "miracle-cure", "scam-link",
+})
+
+
+class EvidenceRef(BaseModel):
+    url: str
+    domain: str
+    stance: str | None = None
+    date: str | None = None
+
+
+class SynthOutput(BaseModel):
+    """What the synthesizer LLM returns; deterministic card fields are filled around it."""
+    one_liner_native: str
+    explanation_native: str             # 3–5 sentences, each factual sentence cited [e:id]
+    manipulation_tags: list[str] = []
+    rebuttal_card_native: str
+
+
+class VerdictCard(BaseModel):
+    slug: str                           # public permalink
+    claim_native: str
+    claim_en: str
+    verdict: VerdictClass
+    confidence: int                     # 0–100
+    one_liner_native: str
+    explanation_native: str
+    manipulation_tags: list[str]
+    evidence: list[EvidenceRef]
+    rebuttal_card_native: str
+    path: Literal["cache", "precedent", "consensus", "trial"]
+    models_used: dict[str, str]         # role → model id (transparency + NIM showcase)

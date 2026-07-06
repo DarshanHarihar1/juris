@@ -1,10 +1,11 @@
-"""Stage machine (LLD §3.2 event protocol). Wires S0→S3:
+"""Stage machine (LLD §3.2 event protocol). Full pipeline S0→S6:
 intake → normalize → persist+embed claims → precedent short-circuit (cache/human
-fact-check) → on a miss, parallel investigation writes a cited evidence log.
-Zero-claim guard ends the job. S4→S6 (verdict/trial/synthesis) append in later phases."""
+fact-check) → on a miss, parallel investigation → fast-path jury or adversarial trial →
+synthesis into the user-facing VerdictCard. Zero-claim guard ends the job."""
 from ..db import pool
-from ..services import events, nim
-from . import s0_intake, s1_normalize, s2_precedent, s3_investigate, s4_fastpath, s5_trial
+from ..services import credibility, events, nim
+from . import (s0_intake, s1_normalize, s2_precedent, s3_investigate, s4_fastpath,
+               s5_trial, s6_synthesize)
 
 
 async def run(job: dict) -> None:
@@ -53,8 +54,20 @@ async def run(job: dict) -> None:
             # S2 — precedent short-circuit (cache / human fact-check)
             await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "started"})
             sc = await s2_precedent.check(con, claim_id, emb, nc.text_norm)
-            if sc:
-                await events.emit(job_id, "verdict", {"claim_id": str(claim_id), **sc})
+            if sc and sc["path"] == "cache":
+                # already-synthesized card from a prior run. ponytail: re-emit as-is;
+                # re-translating into the user's language is a nice-to-have, not v1.
+                await events.emit(job_id, "verdict", {"claim_id": str(claim_id), "path": "cache", **sc["card"]})
+                continue
+            if sc and sc["path"] == "precedent":
+                fc = sc["fact_check"]
+                ev = [{"url": fc["url"], "domain": fc["domain"], "title": fc.get("title"),
+                       "snippet": fc.get("claim") or fc.get("rating"), "stance": "refutes",
+                       "credibility": credibility.score(fc["domain"]), "published_at": fc.get("published_at")}]
+                await s6_synthesize.synthesize(
+                    con, job_id, claim_id, claim_en=nc.text_norm, claim_native=nc.text_norm_native,
+                    lang=norm.detected_lang, verdict=s6_synthesize.rating_to_class(fc.get("rating")),
+                    confidence=80, path="precedent", evidence=ev, original=text)
                 continue
             await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "miss",
                                                 "claim_id": str(claim_id)})
@@ -68,5 +81,8 @@ async def run(job: dict) -> None:
                 await events.emit(job_id, "escalation", {"claim_id": str(claim_id)})
                 result = await s5_trial.run(con, job_id, claim_id, nc.text_norm, evidence)   # S5 trial
 
-            await events.emit(job_id, "verdict", {"claim_id": str(claim_id), **result})
-    # S6 synthesis (Phase 5) renders the user-facing verdict card + persists the verdicts row.
+            # S6 — synthesize the user-facing VerdictCard, persist it, seed the cache.
+            await s6_synthesize.synthesize(
+                con, job_id, claim_id, claim_en=nc.text_norm, claim_native=nc.text_norm_native,
+                lang=norm.detected_lang, verdict=result["verdict"], confidence=result["confidence"],
+                path=result["path"], evidence=evidence, original=text)

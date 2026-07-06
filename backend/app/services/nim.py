@@ -100,7 +100,10 @@ async def chat(model_id: str, messages: list[Message], tools: list[Tool] | None 
     role) and does no schema validation — the caller drives the tool loop."""
     kwargs: dict[str, Any] = {"model": model_id, "messages": messages, "timeout": NIM_TIMEOUT}
     if tools:
+        # parallel_tool_calls=False: some NIM models (e.g. llama-3.1-8b) 500 on multi
+        # tool-calls per turn ("only supports single tool-calls at once"). One at a time.
         kwargs["tools"] = tools
+        kwargs["parallel_tool_calls"] = False
     async with _sem:
         resp = await _get_client().chat.completions.create(**kwargs)
     return resp.choices[0].message

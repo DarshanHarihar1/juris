@@ -15,7 +15,9 @@ roles:
   prosecutor:   { model: deepseek-ai/deepseek-v4-pro,   temp: 0.7 }
   defense:      { model: openai/gpt-oss-120b,           temp: 0.7 }
   judge:        { model: moonshotai/kimi-k2-thinking,   temp: 0.1 }
-  synthesizer:  { model: sarvamai/sarvam-m,             temp: 0.2 }
+  # sarvamai/sarvam-m (Indic-native) timed out on NIM → empty cards. llama-3.1-8b is
+  # reliable and multilingual enough; revisit an Indic model if Hindi quality falls short.
+  synthesizer:  { model: meta/llama-3.1-8b-instruct,    temp: 0.2 }
 provider:
   base_url: https://integrate.api.nvidia.com/v1        # OpenAI-compatible
   auth_env: NIM_API_KEY

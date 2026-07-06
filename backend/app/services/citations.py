@@ -5,7 +5,7 @@ connective phrases, and already-cited sentences pass untouched."""
 import re
 
 _CITE = re.compile(r"\[e:[^\]]+\]")
-_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_SENT_SPLIT = re.compile(r"(?<=[.!?।])\s+")   # includes the Devanagari danda (।) for Hindi
 
 
 def _is_factual_assertion(sentence: str) -> bool:

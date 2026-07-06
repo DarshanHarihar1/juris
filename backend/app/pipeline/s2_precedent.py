@@ -47,7 +47,12 @@ async def _cache(con, claim_id, embedding: list[float]) -> dict | None:
 
 async def _precedent(text_norm: str) -> dict | None:
     hits = await search.factcheck_search(text_norm)
-    good = [h for h in hits if h.get("url") and credibility.score(h.get("domain", "")) >= CREDIBLE]
-    if not good:
+    # Only short-circuit on a RATED human fact-check (the Google Fact Check API carries a
+    # verdict). IFCN site-search hits have no rating — the topic merely appears on a
+    # fact-checker site — so let those fall through to full investigation (S3→S4) rather
+    # than emit an UNVERIFIABLE precedent verdict.
+    rated = [h for h in hits
+             if h.get("url") and h.get("rating") and credibility.score(h.get("domain", "")) >= CREDIBLE]
+    if not rated:
         return None
-    return {"path": "precedent", "fact_check": good[0], "all_matches": good[:5]}
+    return {"path": "precedent", "fact_check": rated[0], "all_matches": rated[:5]}
