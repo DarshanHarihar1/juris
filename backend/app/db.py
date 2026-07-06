@@ -10,7 +10,11 @@ async def pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
         # ponytail: statement_cache_size=0 — required for Supabase's transaction pooler (pgbouncer).
-        _pool = await asyncpg.create_pool(database_url(), statement_cache_size=0)
+        # max_size=5 keeps us under Supabase free's 15-client session-pooler cap (web + worker
+        # share one process/pool here; raise it if we split the worker onto its own instance).
+        _pool = await asyncpg.create_pool(
+            database_url(), statement_cache_size=0, min_size=1, max_size=5
+        )
     return _pool
 
 
