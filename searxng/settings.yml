@@ -1,0 +1,15 @@
+# SearXNG config for Juris' internal JSON search API (LLD §5-S2 / Phase 2).
+# Inherit all packaged defaults; override only what the backend needs.
+# This service is called server-to-server by juris-web, so bot protection off.
+use_default_settings: true
+
+server:
+  # Required by SearXNG. Internal-only service, not user-facing — value isn't sensitive.
+  secret_key: "cdf1e39993d85f8d4d76668ad6e106a4c228673d8bbcf5b6f8ffb6a676280c4e"
+  limiter: false          # the limiter/botdetection 403s API calls; off for internal use
+  image_proxy: false
+
+search:
+  formats:                # enable JSON so search.web_search() can parse results
+    - html
+    - json

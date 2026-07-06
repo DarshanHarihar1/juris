@@ -31,13 +31,13 @@ services:
   # web service runs the queue loop in-process (see app/main.py lifespan).
   # Add a `type: worker` on Starter+ if serving and processing must scale apart.
 
-  # Meta-search. OSS, zero per-query cost (LLD §1/§13).
+  # Meta-search. OSS, zero per-query cost (LLD §1/§13). Built from a thin Dockerfile
+  # that ships searxng/settings.yml — the base image ignores env-var setting overrides,
+  # so JSON output + limiter-off must come from a baked-in settings.yml.
   # ponytail: public on free plan (no pserv on free tier); add auth if exposure is a concern.
   - type: web
     name: juris-searxng
-    runtime: image
+    runtime: docker
     plan: free
-    image: { url: searxng/searxng:latest }
-    envVars:
-      - key: SEARXNG_SETTINGS__SEARCH__FORMATS   # enable JSON output for the wrapper
-        value: '["html","json"]'
+    rootDir: searxng
+    dockerfilePath: ./Dockerfile
