@@ -2,10 +2,14 @@
 intake → normalize → persist+embed claims → precedent short-circuit (cache/human
 fact-check) → on a miss, parallel investigation → fast-path jury or adversarial trial →
 synthesis into the user-facing VerdictCard. Zero-claim guard ends the job."""
+import logging
+
 from ..db import pool
 from ..services import credibility, events, nim
 from . import (s0_intake, s1_normalize, s2_precedent, s3_investigate, s4_fastpath,
                s5_trial, s6_synthesize)
+
+log = logging.getLogger("juris.orchestrator")
 
 
 async def run(job: dict) -> None:
@@ -13,6 +17,7 @@ async def run(job: dict) -> None:
     submission_id = job["submission_id"]
     if submission_id is None:
         raise ValueError("job has no submission_id (use POST /api/verify)")
+    log.info("job=%s start submission=%s", job_id, submission_id)
 
     async with (await pool()).acquire() as con:
         sub = await con.fetchrow("select raw_text, detected_lang from submissions where id = $1", submission_id)
@@ -50,6 +55,7 @@ async def run(job: dict) -> None:
             await events.emit(job_id, "claim", {
                 "claim_id": str(claim_id), "text_norm": nc.text_norm, "claim_type": nc.claim_type,
             })
+            log.info("job=%s claim=%s norm=%r type=%s", job_id, claim_id, nc.text_norm, nc.claim_type)
 
             # S2 — precedent short-circuit (cache / human fact-check)
             await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "started"})
@@ -61,6 +67,8 @@ async def run(job: dict) -> None:
                 continue
             if sc and sc["path"] == "precedent":
                 fc = sc["fact_check"]
+                log.info("job=%s claim=%s -> precedent %s (sim=%.3f) %s", job_id, claim_id,
+                         s6_synthesize.rating_to_class(fc.get("rating")), sc.get("similarity", 0.0), fc.get("url"))
                 ev = [{"url": fc["url"], "domain": fc["domain"], "title": fc.get("title"),
                        "snippet": fc.get("claim") or fc.get("rating"), "stance": "refutes",
                        "credibility": credibility.score(fc["domain"]), "published_at": fc.get("published_at")}]
@@ -74,13 +82,17 @@ async def run(job: dict) -> None:
 
             # S3 — parallel investigation gathers a cited evidence log for the miss.
             evidence = await s3_investigate.investigate(con, job_id, claim_id, nc.text_norm, nc.text_norm_native)
+            log.info("job=%s claim=%s S2 miss -> S3 gathered %d evidence rows", job_id, claim_id, len(evidence))
 
             # S4 — fast-path jury; consensus resolves cheaply, otherwise escalate to trial.
             result = await s4_fastpath.deliberate(job_id, claim_id, nc.text_norm, evidence)
             if result is None:
+                log.info("job=%s claim=%s jury split -> S5 trial", job_id, claim_id)
                 await events.emit(job_id, "escalation", {"claim_id": str(claim_id)})
                 result = await s5_trial.run(con, job_id, claim_id, nc.text_norm, evidence)   # S5 trial
 
+            log.info("job=%s claim=%s VERDICT %s conf=%s path=%s",
+                     job_id, claim_id, result["verdict"], result["confidence"], result["path"])
             # S6 — synthesize the user-facing VerdictCard, persist it, seed the cache.
             await s6_synthesize.synthesize(
                 con, job_id, claim_id, claim_en=nc.text_norm, claim_native=nc.text_norm_native,

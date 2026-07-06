@@ -85,3 +85,32 @@ async def test_cache_hit_and_miss():
     finally:
         await con.execute("delete from submissions where id = $1", sub)  # cascades claims+verdicts
         await (await db.pool()).release(con)
+
+
+# --- precedent semantic gate (offline) ------------------------------------------
+async def test_precedent_semantic_gate(monkeypatch):
+    """A rated fact-check is only trusted if its claim text is embedding-similar to THIS
+    claim — guards against Google FactCheck's fuzzy keyword matches (e.g. 'Modi is PM'
+    wrongly matching a 'Modi is first OBC PM' debunk)."""
+    from app.pipeline import s2_precedent as s2
+    from app.services import search
+
+    hit = {"url": "https://altnews.in/x", "domain": "altnews.in",
+           "rating": "False", "claim": "Modi is India's first OBC PM"}
+
+    async def fake_fc(_q):
+        return [hit]
+    monkeypatch.setattr(search, "factcheck_search", fake_fc)
+
+    # dissimilar fact-check (orthogonal embedding) → rejected, fall through
+    async def emb_far(_texts):
+        return [[0.0, 1.0, 0.0]]
+    monkeypatch.setattr(s2.nim, "embed", emb_far)
+    assert await s2._precedent("Modi is PM", [1.0, 0.0, 0.0], "c1") is None
+
+    # same claim (aligned embedding) → accepted
+    async def emb_near(_texts):
+        return [[1.0, 0.0, 0.0]]
+    monkeypatch.setattr(s2.nim, "embed", emb_near)
+    res = await s2._precedent("Modi is PM", [1.0, 0.0, 0.0], "c2")
+    assert res is not None and res["path"] == "precedent" and res["similarity"] > 0.99

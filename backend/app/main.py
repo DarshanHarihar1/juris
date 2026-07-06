@@ -3,6 +3,8 @@ POST /api/verify (text only), GET /api/jobs/{id}/events, GET /api/verdicts/{slug
 POST /api/media and non-text types return 501 (v1 text-only)."""
 import asyncio
 import json
+import logging
+import sys
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -12,6 +14,16 @@ from pydantic import BaseModel
 
 from . import db, worker
 from .services import jobs
+
+# Route juris.* logs to stdout so `render logs` captures the pipeline trace (S2 decisions,
+# verdicts, errors). One handler, INFO level; the in-process worker shares this process.
+_jlog = logging.getLogger("juris")
+if not _jlog.handlers:
+    _h = logging.StreamHandler(sys.stdout)
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s | %(message)s"))
+    _jlog.addHandler(_h)
+    _jlog.setLevel(logging.INFO)
+    _jlog.propagate = False
 
 
 @asynccontextmanager

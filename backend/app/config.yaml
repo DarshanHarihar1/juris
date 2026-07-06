@@ -26,5 +26,6 @@ provider:
 thresholds:
   agreement_theta: 0.75
   cache_similarity: 0.92
+  precedent_similarity: 0.85           # min claim↔fact-check similarity to trust a human debunk
   max_rebuttal_rounds: 2
   max_tool_calls_per_investigator: 3
