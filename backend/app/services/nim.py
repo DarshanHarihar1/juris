@@ -87,6 +87,22 @@ async def call(
         return _wrap(resp, fallback)
 
 
+CHAT_TIMEOUT = 45.0  # per-call ceiling; the OpenAI client default (600s) would stall a job
+
+
+async def chat(model_id: str, messages: list[Message], tools: list[Tool] | None = None) -> Any:
+    """One raw chat completion under the shared semaphore, returning the assistant
+    message object (.content, .tool_calls) for agentic tool loops (S3 investigators).
+    Unlike call(), this takes an explicit model_id (investigators aren't a single-model
+    role) and does no schema validation — the caller drives the tool loop."""
+    kwargs: dict[str, Any] = {"model": model_id, "messages": messages, "timeout": CHAT_TIMEOUT}
+    if tools:
+        kwargs["tools"] = tools
+    async with _sem:
+        resp = await _get_client().chat.completions.create(**kwargs)
+    return resp.choices[0].message
+
+
 async def embed(texts: list[str], input_type: str = "query") -> list[list[float]]:
     """Embeddings via NIM (1024-dim, matches claims.embedding vector(1024)). NVIDIA
     embed NIMs require input_type ("query"/"passage") + truncate. We use "query" for

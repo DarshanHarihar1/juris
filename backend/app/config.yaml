@@ -3,9 +3,11 @@
 roles:
   embeddings:   { model: nvidia/nv-embedqa-e5-v5, dims: 1024 }  # 1024-dim; baai/bge-m3 500s on NIM. We embed the English text_norm pivot, so English-centric is fine.
   normalizer:   { model: meta/llama-3.1-8b-instruct, temp: 0.0 }
-  investigators:                       # 2 DIFFERENT families (MVP), run in parallel
-    - { model: meta/llama-3.3-70b-instruct,      tools: [web_search, factcheck_search, numeric_check] }
-    - { model: qwen/qwen3-next-80b-a3b-instruct, tools: [web_search, factcheck_search, source_credibility] }
+  investigators:                       # 2 DIFFERENT families (MVP), run in parallel.
+    # Small fast tool-callers: dense 70B/80B ran to the 120s budget; these ~8–9B swaps
+    # keep cross-family diversity (Meta + NVIDIA) and cut the loop to well under 30s.
+    - { model: meta/llama-3.1-8b-instruct,        tools: [web_search, factcheck_search, numeric_check] }
+    - { model: nvidia/nvidia-nemotron-nano-9b-v2, tools: [web_search, factcheck_search, source_credibility] }
   fastpath_jury:                       # 3 independent verdict voters, different families
     [ meta/llama-3.3-70b-instruct, deepseek-ai/deepseek-v4-flash, nvidia/llama-3.3-nemotron-super-49b-v1.5 ]
   prosecutor:   { model: deepseek-ai/deepseek-v4-pro,   temp: 0.7 }

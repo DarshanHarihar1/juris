@@ -1,9 +1,10 @@
-"""Stage machine (LLD §3.2 event protocol). Wires S0→S2:
+"""Stage machine (LLD §3.2 event protocol). Wires S0→S3:
 intake → normalize → persist+embed claims → precedent short-circuit (cache/human
-fact-check). Zero-claim guard ends the job. S3→S6 append in later phases."""
+fact-check) → on a miss, parallel investigation writes a cited evidence log.
+Zero-claim guard ends the job. S4→S6 (verdict/trial/synthesis) append in later phases."""
 from ..db import pool
 from ..services import events, nim
-from . import s0_intake, s1_normalize, s2_precedent
+from . import s0_intake, s1_normalize, s2_precedent, s3_investigate
 
 
 async def run(job: dict) -> None:
@@ -54,7 +55,10 @@ async def run(job: dict) -> None:
             sc = await s2_precedent.check(con, claim_id, emb, nc.text_norm)
             if sc:
                 await events.emit(job_id, "verdict", {"claim_id": str(claim_id), **sc})
-            else:
-                await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "miss",
-                                                    "claim_id": str(claim_id)})
-    # S3 investigation → S6 synthesis land in later phases (S2 misses escalate there).
+                continue
+            await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "miss",
+                                                "claim_id": str(claim_id)})
+
+            # S3 — parallel investigation gathers a cited evidence log for the miss.
+            await s3_investigate.investigate(con, job_id, claim_id, nc.text_norm, nc.text_norm_native)
+    # S4 verdict → S6 synthesis land in later phases (they read the S3 evidence log).
