@@ -160,6 +160,7 @@ async def investigate(con, job_id, claim_id, claim_en: str, claim_native: str) -
             claim_id, ev["url"], ev["domain"], ev["title"], ev["snippet"],
             ev["stance"], ev["credibility"], ev["found_by"],
         )
+        ev["id"] = str(row_id)                                     # so S4/S5 can cite [e:id]
         await events.emit(job_id, "evidence", {"evidence_id": str(row_id), "claim_id": str(claim_id), **ev})
 
     await events.emit(job_id, "stage", {"stage": "S3_INVESTIGATE", "status": "done",

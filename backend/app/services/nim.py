@@ -20,6 +20,10 @@ Tool = dict[str, Any]
 # ponytail: concurrency cap, not a token-bucket. Add time-based limiting if 429s persist.
 _sem = asyncio.Semaphore(provider().get("rate_limit", 40))
 
+# Per-request ceiling for every NIM call. The OpenAI client default is 600s, which would
+# let one slow model stall a whole job; on timeout call() falls back to the fallback model.
+NIM_TIMEOUT = 45.0
+
 _client: AsyncOpenAI | None = None
 
 
@@ -49,17 +53,19 @@ def _resolve_model(role_name: str) -> tuple[str, dict]:
 
 
 async def call(
-    role_name: str,
+    role_name: str | None,
     messages: list[Message],
     tools: list[Tool] | None = None,
     response_schema: type[BaseModel] | None = None,
+    model_id: str | None = None,
 ) -> NimResponse:
-    model, params = _resolve_model(role_name)
+    # model_id override: for list-roles like fastpath_jury, the caller picks the model.
+    model, params = (model_id, {}) if model_id else _resolve_model(role_name)
     fallback = provider()["fallback_model"]
 
     async def _once(model_id: str, extra_user: str | None = None) -> Any:
         msgs = messages + ([{"role": "user", "content": extra_user}] if extra_user else [])
-        kwargs: dict[str, Any] = {"model": model_id, "messages": msgs, **params}
+        kwargs: dict[str, Any] = {"model": model_id, "messages": msgs, "timeout": NIM_TIMEOUT, **params}
         if tools:
             kwargs["tools"] = tools
         if response_schema is not None:
@@ -87,15 +93,12 @@ async def call(
         return _wrap(resp, fallback)
 
 
-CHAT_TIMEOUT = 45.0  # per-call ceiling; the OpenAI client default (600s) would stall a job
-
-
 async def chat(model_id: str, messages: list[Message], tools: list[Tool] | None = None) -> Any:
     """One raw chat completion under the shared semaphore, returning the assistant
     message object (.content, .tool_calls) for agentic tool loops (S3 investigators).
     Unlike call(), this takes an explicit model_id (investigators aren't a single-model
     role) and does no schema validation — the caller drives the tool loop."""
-    kwargs: dict[str, Any] = {"model": model_id, "messages": messages, "timeout": CHAT_TIMEOUT}
+    kwargs: dict[str, Any] = {"model": model_id, "messages": messages, "timeout": NIM_TIMEOUT}
     if tools:
         kwargs["tools"] = tools
     async with _sem:

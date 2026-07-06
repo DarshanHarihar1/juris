@@ -41,3 +41,29 @@ class NormalizedClaim(BaseModel):
 class NormalizerOutput(BaseModel):
     detected_lang: str                  # "en", "hi", "hi-Latn", ...
     claims: list[NormalizedClaim]       # opinions/greetings already dropped; ≤3 atomic
+
+
+# --- S4/S5 verdict engine (LLD §4.4, §5-S4/S5) ----------------------------------
+VerdictClass = Literal["TRUE", "FALSE", "MISLEADING", "UNVERIFIABLE", "CONFLICTING"]
+
+
+class JurorVote(BaseModel):
+    """One fast-path juror reading claim + evidence log (no browsing)."""
+    verdict: VerdictClass
+    confidence: float                   # 0–1
+    key_evidence_ids: list[str] = []    # evidence tags (e1, e2, …) the vote leans on
+    reasoning_short: str = ""
+
+
+class Argument(BaseModel):
+    """One prosecutor/defense turn. Factual sentences must carry [e:id] citations."""
+    text: str
+    search_query: str | None = None     # optional single extra targeted search this side wants
+
+
+class Ruling(BaseModel):
+    """The Judge's verdict over an anonymized transcript + evidence log."""
+    verdict: VerdictClass
+    confidence: float                   # 0–1
+    decisive_evidence_ids: list[str] = []
+    reasoning: str = ""

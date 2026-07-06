@@ -4,7 +4,7 @@ fact-check) → on a miss, parallel investigation writes a cited evidence log.
 Zero-claim guard ends the job. S4→S6 (verdict/trial/synthesis) append in later phases."""
 from ..db import pool
 from ..services import events, nim
-from . import s0_intake, s1_normalize, s2_precedent, s3_investigate
+from . import s0_intake, s1_normalize, s2_precedent, s3_investigate, s4_fastpath, s5_trial
 
 
 async def run(job: dict) -> None:
@@ -60,5 +60,13 @@ async def run(job: dict) -> None:
                                                 "claim_id": str(claim_id)})
 
             # S3 — parallel investigation gathers a cited evidence log for the miss.
-            await s3_investigate.investigate(con, job_id, claim_id, nc.text_norm, nc.text_norm_native)
-    # S4 verdict → S6 synthesis land in later phases (they read the S3 evidence log).
+            evidence = await s3_investigate.investigate(con, job_id, claim_id, nc.text_norm, nc.text_norm_native)
+
+            # S4 — fast-path jury; consensus resolves cheaply, otherwise escalate to trial.
+            result = await s4_fastpath.deliberate(job_id, claim_id, nc.text_norm, evidence)
+            if result is None:
+                await events.emit(job_id, "escalation", {"claim_id": str(claim_id)})
+                result = await s5_trial.run(con, job_id, claim_id, nc.text_norm, evidence)   # S5 trial
+
+            await events.emit(job_id, "verdict", {"claim_id": str(claim_id), **result})
+    # S6 synthesis (Phase 5) renders the user-facing verdict card + persists the verdicts row.

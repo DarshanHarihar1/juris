@@ -8,8 +8,10 @@ roles:
     # keep cross-family diversity (Meta + NVIDIA) and cut the loop to well under 30s.
     - { model: meta/llama-3.1-8b-instruct,        tools: [web_search, factcheck_search, numeric_check] }
     - { model: nvidia/nvidia-nemotron-nano-9b-v2, tools: [web_search, factcheck_search, source_credibility] }
-  fastpath_jury:                       # 3 independent verdict voters, different families
-    [ meta/llama-3.3-70b-instruct, deepseek-ai/deepseek-v4-flash, nvidia/llama-3.3-nemotron-super-49b-v1.5 ]
+  fastpath_jury:                       # 3 independent verdict voters, different families.
+    # Fast small voters (jurors don't browse, just read evidence): the dense 70B/49B ran
+    # ~2min; these keep 3-family diversity (Meta / DeepSeek / NVIDIA) at a fraction of the latency.
+    [ meta/llama-3.1-8b-instruct, deepseek-ai/deepseek-v4-flash, nvidia/nvidia-nemotron-nano-9b-v2 ]
   prosecutor:   { model: deepseek-ai/deepseek-v4-pro,   temp: 0.7 }
   defense:      { model: openai/gpt-oss-120b,           temp: 0.7 }
   judge:        { model: moonshotai/kimi-k2-thinking,   temp: 0.1 }
