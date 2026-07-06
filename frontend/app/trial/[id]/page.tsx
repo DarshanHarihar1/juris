@@ -78,6 +78,7 @@ export default function TrialPage({ params }: { params: { id: string } }) {
   }
 
   const started = events.length > 0;
+  const finished = verdict !== null || terminal !== null;
 
   return (
     <main className="min-h-dvh">
@@ -85,11 +86,11 @@ export default function TrialPage({ params }: { params: { id: string } }) {
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
           <Wordmark />
           <div className="hidden sm:block">
-            <StageRail stageStatus={stageStatus} escalated={escalated} />
+            <StageRail stageStatus={stageStatus} escalated={escalated} finished={finished} />
           </div>
         </div>
         <div className="mt-2 overflow-x-auto sm:hidden">
-          <StageRail stageStatus={stageStatus} escalated={escalated} />
+          <StageRail stageStatus={stageStatus} escalated={escalated} finished={finished} />
         </div>
       </header>
 

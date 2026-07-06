@@ -63,10 +63,16 @@ async def run(job: dict) -> None:
             if sc and sc["path"] == "cache":
                 # already-synthesized card from a prior run. ponytail: re-emit as-is;
                 # re-translating into the user's language is a nice-to-have, not v1.
-                await events.emit(job_id, "verdict", {"claim_id": str(claim_id), "path": "cache", **sc["card"]})
+                await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "done",
+                                                    "claim_id": str(claim_id), "hit": "cache"})
+                await events.emit(job_id, "verdict", {"claim_id": str(claim_id), **sc["card"], "path": "cache"})
+                log.info("job=%s claim=%s VERDICT %s path=cache (sim=%.3f)",
+                         job_id, claim_id, sc.get("verdict"), sc.get("similarity", 0.0))
                 continue
             if sc and sc["path"] == "precedent":
                 fc = sc["fact_check"]
+                await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "done",
+                                                    "claim_id": str(claim_id), "hit": "precedent"})
                 log.info("job=%s claim=%s -> precedent %s (sim=%.3f) %s", job_id, claim_id,
                          s6_synthesize.rating_to_class(fc.get("rating")), sc.get("similarity", 0.0), fc.get("url"))
                 ev = [{"url": fc["url"], "domain": fc["domain"], "title": fc.get("title"),
