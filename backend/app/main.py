@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from . import db, worker
@@ -25,6 +26,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Juris", lifespan=lifespan)
+# ponytail: open CORS — public read API, no cookies/credentials. Restrict origins if abused.
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 @app.get("/health")

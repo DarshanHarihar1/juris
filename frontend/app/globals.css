@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background: theme("colors.paper");
+  color: theme("colors.ink");
+}
+
+/* thin, quiet scrollbar to keep the live stream calm */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: theme("colors.line") transparent;
+}
+
+::selection {
+  background: #1c1917;
+  color: #faf9f7;
+}
