@@ -1,5 +1,6 @@
-# Render Blueprint — Juris backend: Web Service (FastAPI) + Background Worker.
-# Both auto-deploy on push to main. Set NIM_API_KEY and DATABASE_URL in the
+# Render Blueprint — Juris backend: Web Service (FastAPI, runs the job queue
+# in-process) + SearXNG meta-search. Auto-deploy on push to main. Set
+# NIM_API_KEY and DATABASE_URL in the
 # Render dashboard (sync: false = secret, entered once per service).
 services:
   - type: web
@@ -21,23 +22,9 @@ services:
       - key: SEARXNG_URL              # internal URL of the searxng service
         fromService: { name: juris-searxng, type: web, property: hostport }
 
-  - type: worker
-    name: juris-worker
-    runtime: python
-    plan: free
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m app.worker
-    autoDeploy: true
-    envVars:
-      - key: NIM_API_KEY
-        sync: false
-      - key: DATABASE_URL
-        sync: false
-      - key: GOOGLE_FACTCHECK_API_KEY
-        sync: false
-      - key: SEARXNG_URL
-        fromService: { name: juris-searxng, type: web, property: hostport }
+  # ponytail: no separate worker service — free plan has no worker dyno, so the
+  # web service runs the queue loop in-process (see app/main.py lifespan).
+  # Add a `type: worker` on Starter+ if serving and processing must scale apart.
 
   # Meta-search. OSS, zero per-query cost (LLD §1/§13).
   # ponytail: public on free plan (no pserv on free tier); add auth if exposure is a concern.

@@ -1,6 +1,7 @@
 """FastAPI web service (LLD §3.1). Phase 1 public REST:
 POST /api/verify (text only), GET /api/jobs/{id}/events, GET /api/verdicts/{slug}.
 POST /api/media and non-text types return 501 (v1 text-only)."""
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -8,13 +9,18 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from . import db
+from . import db, worker
 from .services import jobs
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # ponytail: worker runs in-process (free plan has no worker dyno). Single
+    # instance both serves and drains the queue — fine for demo scale. Split
+    # into a `type: worker` on Starter+ if the two need to scale independently.
+    worker_task = asyncio.create_task(worker.run())
     yield
+    worker_task.cancel()
     await db.close()
 
 
