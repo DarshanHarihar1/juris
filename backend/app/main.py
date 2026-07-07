@@ -8,12 +8,14 @@ import sys
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from urllib.parse import parse_qs
+
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from . import db, worker
-from .services import jobs
+from . import config, db, worker
+from .services import jobs, whatsapp
 
 # Route juris.* logs to stdout so `render logs` captures the pipeline trace (S2 decisions,
 # verdicts, errors). One handler, INFO level; the in-process worker shares this process.
@@ -94,6 +96,48 @@ async def get_verdict(slug: str):
     if row is None:
         raise HTTPException(404, "verdict not found")
     return json.loads(row["card"])
+
+
+@app.post("/webhooks/whatsapp")
+async def whatsapp_webhook(request: Request):
+    """Twilio WhatsApp sandbox inbound (LLD §8). Enqueues a job and acks synchronously via
+    TwiML — no outbound API call for the ack. The verdict is pushed later by the worker.
+    ponytail: stdlib parse_qs handles the form-encoded body (no python-multipart dep). Raw
+    wa_id/From are used here but never logged or persisted un-hashed (§35)."""
+    form = {k: v[0] for k, v in parse_qs((await request.body()).decode()).items()}
+    msg = whatsapp.adapter.parse_inbound(form)
+
+    # "R" → forwardable rebuttal for this user's most recent verdict, replied inline via TwiML.
+    if msg.text.upper() == "R":
+        async with (await db.pool()).acquire() as con:
+            row = await con.fetchrow(
+                """select v.card from verdicts v
+                     join claims c on c.id = v.claim_id
+                     join submissions s on s.id = c.submission_id
+                    where s.user_hash = $1 order by v.created_at desc limit 1""",
+                whatsapp.hash_waid(msg.wa_id))
+        rebuttal = (json.loads(row["card"]).get("rebuttal_card_native") if row
+                    else None) or "No recent verdict yet — send a claim to fact-check first."
+        return Response(whatsapp.ack_twiml(rebuttal), media_type="application/xml")
+
+    async with (await db.pool()).acquire() as con:
+        async with con.transaction():
+            # Idempotency: a retried webhook returns the same job, no re-enqueue (§8).
+            job_id = await con.fetchval("select job_id from wa_inbound where message_sid = $1", msg.msg_sid)
+            if job_id is None:
+                submission_id = await con.fetchval(
+                    """insert into submissions (channel, user_hash, media_type, raw_text, reply_to)
+                       values ('whatsapp', $1, 'text', $2, $3) returning id""",
+                    whatsapp.hash_waid(msg.wa_id), msg.text, msg.reply_to)
+                job_id = await con.fetchval(
+                    "insert into jobs (submission_id) values ($1) returning id", submission_id)
+                await con.execute(
+                    "insert into wa_inbound (message_sid, job_id) values ($1, $2)", msg.msg_sid, job_id)
+
+    trial_url = f"{config.public_base_url()}/trial/{job_id}"
+    return Response(
+        whatsapp.ack_twiml(f"🔍 Juris is investigating — watch the live trial: {trial_url}"),
+        media_type="application/xml")
 
 
 @app.post("/api/media")

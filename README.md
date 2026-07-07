@@ -115,15 +115,15 @@ latency from several minutes to under 90s without hurting verdict quality.
 ```
 backend/
   app/
-    main.py              FastAPI app: /api/verify, /api/jobs/{id}/events, /api/verdicts/{slug}
+    main.py              FastAPI app: /api/verify, /api/jobs/{id}/events, /api/verdicts/{slug}, /webhooks/whatsapp
     worker.py             in-process job-queue poll loop
     config.py / config.yaml   role→model matrix, thresholds
     models.py             Pydantic schemas (Submission, Claim, VerdictCard, ...)
     db.py                  asyncpg pool (Supabase pooler-safe)
     pipeline/              s0_intake → s6_synthesize, orchestrator.py wires them
-    services/              nim.py, search.py, tools.py, credibility.py, citations.py, jobs.py, events.py
+    services/              nim.py, search.py, tools.py, credibility.py, citations.py, jobs.py, events.py, whatsapp.py
     data/                  domains.yaml (credibility table), factcheckers.yaml (IFCN sites)
-  migrations/              0001 schema, 0002 RLS, 0003 frontend/Realtime policies
+  migrations/              0001 schema, 0002 RLS, 0003 frontend/Realtime, 0004 WhatsApp
   tests/                   test_phase{0..5}.py — offline (mocked) + @needs_db/@needs_nim live tests
 frontend/
   app/

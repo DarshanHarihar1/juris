@@ -5,11 +5,16 @@ synthesis into the user-facing VerdictCard. Zero-claim guard ends the job."""
 import logging
 
 from ..db import pool
-from ..services import credibility, events, nim
+from ..services import credibility, events, nim, whatsapp
 from . import (s0_intake, s1_normalize, s2_precedent, s3_investigate, s4_fastpath,
                s5_trial, s6_synthesize)
 
 log = logging.getLogger("juris.orchestrator")
+
+
+def _wa(sub) -> bool:
+    """True when this job arrived over WhatsApp and still has a reply address to push to."""
+    return sub["channel"] == "whatsapp" and bool(sub["reply_to"])
 
 
 async def run(job: dict) -> None:
@@ -21,7 +26,7 @@ async def run(job: dict) -> None:
 
     async with (await pool()).acquire() as con:
         sub = await con.fetchrow(
-            "select media_type, raw_text, media_uri, detected_lang from submissions where id = $1",
+            "select media_type, raw_text, media_uri, detected_lang, channel, reply_to from submissions where id = $1",
             submission_id)
     if sub is None:
         raise ValueError(f"submission {submission_id} not found")
@@ -34,10 +39,11 @@ async def run(job: dict) -> None:
 
     # url fetch / OCR yielded nothing → terminal (mirrors the zero-claim guard below).
     if not text:
-        await events.emit(job_id, "terminal", {
-            "reason": "nothing_to_verify",
-            "message": "Couldn't extract any text to verify from that input.",
-        })
+        msg = "Couldn't extract any text to verify from that input."
+        await events.emit(job_id, "terminal", {"reason": "nothing_to_verify", "message": msg})
+        if _wa(sub):
+            async with (await pool()).acquire() as con:
+                await whatsapp.deliver_text(con, submission_id, sub["reply_to"], msg)
         return
 
     # S1 — normalize & decompose
@@ -50,10 +56,10 @@ async def run(job: dict) -> None:
 
         # Guard: nothing checkable → terminal reply, job ends (cost floor, LLD §5-S1).
         if not norm.claims:
-            await events.emit(job_id, "terminal", {
-                "reason": "nothing_to_verify",
-                "message": "No checkable factual claim found — nothing to verify.",
-            })
+            msg = "No checkable factual claim found — nothing to verify."
+            await events.emit(job_id, "terminal", {"reason": "nothing_to_verify", "message": msg})
+            if _wa(sub):
+                await whatsapp.deliver_text(con, submission_id, sub["reply_to"], msg)
             return
 
         embeddings = await nim.embed([nc.text_norm for nc in norm.claims])
@@ -115,3 +121,7 @@ async def run(job: dict) -> None:
                 con, job_id, claim_id, claim_en=nc.text_norm, claim_native=nc.text_norm_native,
                 lang=norm.detected_lang, verdict=result["verdict"], confidence=result["confidence"],
                 path=result["path"], evidence=evidence, original=text)
+
+        # All claims decided — push the verdict card(s) back over WhatsApp and clear reply_to.
+        if _wa(sub):
+            await whatsapp.deliver_verdicts(con, submission_id, sub["reply_to"])

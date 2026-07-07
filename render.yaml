@@ -24,6 +24,16 @@ services:
         sync: false
       - key: GOOGLE_FACTCHECK_API_KEY
         sync: false
+      # WhatsApp (Phase 7). Twilio creds + the wa_id hash salt — all secret, set once in
+      # the Render dashboard. WA_HASH_SALT MUST stay constant (it keys the per-user hash).
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_FROM
+        sync: false
+      - key: WA_HASH_SALT
+        sync: false
       - key: SEARXNG_URL              # internal URL of the searxng service
         fromService: { name: juris-searxng, type: web, property: hostport }
 

@@ -38,3 +38,9 @@ def database_url() -> str:
     if not url:
         raise RuntimeError("DATABASE_URL not set in environment")
     return url
+
+
+def public_base_url() -> str:
+    """Absolute origin of the frontend — used to build clickable trial/verdict links
+    for WhatsApp (relative paths aren't tappable in a chat)."""
+    return os.environ.get("PUBLIC_BASE_URL", "https://juris-eta.vercel.app").rstrip("/")
