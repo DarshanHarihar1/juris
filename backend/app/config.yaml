@@ -18,6 +18,7 @@ roles:
   # sarvamai/sarvam-m (Indic-native) timed out on NIM → empty cards. llama-3.1-8b is
   # reliable and multilingual enough; revisit an Indic model if Hindi quality falls short.
   synthesizer:  { model: meta/llama-3.1-8b-instruct,    temp: 0.2 }
+  ocr:          { model: meta/llama-3.2-11b-vision-instruct }  # S0 image→text; re-pin from NIM vision catalog. 11b is fast enough for transcription.
 provider:
   base_url: https://integrate.api.nvidia.com/v1        # OpenAI-compatible
   auth_env: NIM_API_KEY

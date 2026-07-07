@@ -17,16 +17,58 @@ pytestmark = pytest.mark.asyncio
 async def test_api_contract():
     from app.main import VerifyBody, media, verify
 
-    with pytest.raises(HTTPException) as e:                 # non-text → 501
-        await verify(VerifyBody(type="image", content="x"))
+    with pytest.raises(HTTPException) as e:                 # audio still unsupported → 501
+        await verify(VerifyBody(type="audio", content="x"))
     assert e.value.status_code == 501
 
     with pytest.raises(ValidationError):                   # missing content → 422 at parse
         VerifyBody(type="text")
 
-    with pytest.raises(HTTPException) as e:                 # media upload → 501
+    with pytest.raises(ValidationError):                   # unknown type → 422 at parse
+        VerifyBody(type="video", content="x")
+
+    with pytest.raises(HTTPException) as e:                 # legacy media upload → 501
         await media()
     assert e.value.status_code == 501
+
+
+# --- S0 intake: url / image resolution (no NIM / network needed) -----------------
+async def test_s0_url_strips_html(monkeypatch):
+    from app.pipeline import s0_intake
+
+    html_doc = ("<html><head><style>.x{color:red}</style></head><body>"
+                "<script>var y=1;</script><h1>NASA confirms water on Mars</h1>"
+                "<p>Reported&nbsp;today.</p></body></html>")
+
+    class _Resp:
+        text = html_doc
+        def raise_for_status(self): pass
+
+    class _Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, *a, **k): return _Resp()
+
+    monkeypatch.setattr(s0_intake.httpx, "AsyncClient", _Client)
+    out = await s0_intake.intake("url", None, "https://example.com/mars")
+    assert "NASA confirms water on Mars" in out
+    assert "var y" not in out and "color:red" not in out      # script/style dropped
+    assert "&nbsp;" not in out                                # entities unescaped
+
+
+async def test_s0_image_ocr(monkeypatch):
+    from app.pipeline import s0_intake
+
+    async def _fake_chat(model, messages):
+        assert messages[0]["content"][1]["image_url"]["url"].startswith("data:image/")
+        return type("M", (), {"content": "Lemon water cures cancer"})()
+
+    monkeypatch.setattr(s0_intake.nim, "chat", _fake_chat)
+    out = await s0_intake.intake("image", None, "data:image/png;base64,AAAA")
+    assert out == "Lemon water cures cancer"
+
+    assert await s0_intake.intake("image", None, "not-an-image") == ""   # bad ref → empty
 
 
 # --- normalization quality ------------------------------------------------------

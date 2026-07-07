@@ -1,6 +1,6 @@
-"""FastAPI web service (LLD §3.1). Phase 1 public REST:
-POST /api/verify (text only), GET /api/jobs/{id}/events, GET /api/verdicts/{slug}.
-POST /api/media and non-text types return 501 (v1 text-only)."""
+"""FastAPI web service (LLD §3.1). Public REST:
+POST /api/verify (text / url / image), GET /api/jobs/{id}/events, GET /api/verdicts/{slug}.
+url/image content is resolved to text in S0 by the worker; audio still returns 501."""
 import asyncio
 import json
 import logging
@@ -55,14 +55,18 @@ class VerifyBody(BaseModel):
 
 @app.post("/api/verify")
 async def verify(body: VerifyBody):
-    """Create a submission + enqueue a job. v1 handles text only."""
-    if body.type != "text":
-        raise HTTPException(501, f"type '{body.type}' not supported yet (v1 text-only)")
+    """Create a submission + enqueue a job. text/url/image supported (audio deferred).
+    url/image are resolved to text in S0 by the worker, keeping this endpoint fast."""
+    if body.type == "audio":
+        raise HTTPException(501, "type 'audio' not supported yet")
+    # text → raw_text; url/image → media_uri (the URL or a data: image). S0 resolves both.
+    raw_text = body.content if body.type == "text" else None
+    media_uri = body.content if body.type in ("url", "image") else None
     async with (await db.pool()).acquire() as con:
         submission_id = await con.fetchval(
-            """insert into submissions (channel, user_hash, media_type, raw_text)
-               values ('web', 'web-anon', 'text', $1) returning id""",
-            body.content,
+            """insert into submissions (channel, user_hash, media_type, raw_text, media_uri)
+               values ('web', 'web-anon', $1, $2, $3) returning id""",
+            body.type, raw_text, media_uri,
         )
     job_id = await jobs.enqueue(submission_id=submission_id)
     return {"job_id": str(job_id), "trial_url": f"/trial/{job_id}", "status": "queued"}

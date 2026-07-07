@@ -20,14 +20,25 @@ async def run(job: dict) -> None:
     log.info("job=%s start submission=%s", job_id, submission_id)
 
     async with (await pool()).acquire() as con:
-        sub = await con.fetchrow("select raw_text, detected_lang from submissions where id = $1", submission_id)
+        sub = await con.fetchrow(
+            "select media_type, raw_text, media_uri, detected_lang from submissions where id = $1",
+            submission_id)
     if sub is None:
         raise ValueError(f"submission {submission_id} not found")
 
-    # S0 — intake (text-only v1)
-    await events.emit(job_id, "stage", {"stage": "S0_INTAKE", "status": "started"})
-    text = s0_intake.intake(sub["raw_text"] or "")
+    # S0 — intake: resolve text / url / image down to plain text for S1.
+    await events.emit(job_id, "stage", {"stage": "S0_INTAKE", "status": "started",
+                                        "media_type": sub["media_type"]})
+    text = await s0_intake.intake(sub["media_type"], sub["raw_text"], sub["media_uri"])
     await events.emit(job_id, "stage", {"stage": "S0_INTAKE", "status": "done"})
+
+    # url fetch / OCR yielded nothing → terminal (mirrors the zero-claim guard below).
+    if not text:
+        await events.emit(job_id, "terminal", {
+            "reason": "nothing_to_verify",
+            "message": "Couldn't extract any text to verify from that input.",
+        })
+        return
 
     # S1 — normalize & decompose
     await events.emit(job_id, "stage", {"stage": "S1_NORMALIZE", "status": "started"})

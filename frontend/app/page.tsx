@@ -10,14 +10,28 @@ const SAMPLES = [
   "The Great Wall of China is the only man-made object visible from space.",
 ];
 
+type Mode = "text" | "url" | "image";
+
 export default function Home() {
+  const [mode, setMode] = useState<Mode>("text");
   const [text, setText] = useState("");
+  const [image, setImage] = useState<{ name: string; data: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const router = useRouter();
 
+  // content = the trimmed claim/url, or the image data URL for OCR.
+  const content = mode === "image" ? image?.data ?? "" : text.trim();
+
+  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => setImage({ name: f.name, data: reader.result as string });
+    reader.readAsDataURL(f); // data:image/...;base64,... — S0 OCRs it
+  }
+
   async function submit() {
-    const content = text.trim();
     if (!content || loading) return;
     setLoading(true);
     setErr(null);
@@ -25,7 +39,7 @@ export default function Home() {
       const r = await fetch(`${API_URL}/api/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "text", content }),
+        body: JSON.stringify({ type: mode, content }),
       });
       if (!r.ok) throw new Error(`Server responded ${r.status}`);
       const { job_id } = await r.json();
@@ -53,37 +67,69 @@ export default function Home() {
           </p>
 
           <div className="mt-6">
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
-              }}
-              placeholder="Paste the claim here…"
-              rows={4}
-              className="w-full resize-none rounded-xl border border-line bg-white/60 px-4 py-3
-                         text-[15px] leading-relaxed outline-none transition
-                         focus:border-ink/30 focus:bg-white placeholder:text-muted/60"
-            />
+            <div className="mb-3 flex gap-1 text-sm">
+              {(["text", "url", "image"] as Mode[]).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  className={`rounded-full px-3 py-1 capitalize transition ${
+                    mode === m
+                      ? "bg-ink text-paper"
+                      : "text-muted hover:text-ink border border-line"
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+
+            {mode === "image" ? (
+              <label
+                className="flex h-28 w-full cursor-pointer flex-col items-center justify-center gap-1
+                           rounded-xl border border-dashed border-line bg-white/60 text-sm text-muted
+                           transition hover:border-ink/30 hover:bg-white"
+              >
+                <input type="file" accept="image/*" onChange={onFile} className="hidden" />
+                {image ? (
+                  <span className="text-ink">{image.name}</span>
+                ) : (
+                  <span>Click to upload a screenshot — its text is read via OCR</span>
+                )}
+              </label>
+            ) : (
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
+                }}
+                placeholder={mode === "url" ? "Paste a link to an article…" : "Paste the claim here…"}
+                rows={4}
+                className="w-full resize-none rounded-xl border border-line bg-white/60 px-4 py-3
+                           text-[15px] leading-relaxed outline-none transition
+                           focus:border-ink/30 focus:bg-white placeholder:text-muted/60"
+              />
+            )}
 
             <div className="mt-3 flex items-center justify-between gap-4">
               <div className="flex flex-wrap gap-2">
-                {SAMPLES.map((s, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setText(s)}
-                    className="text-xs text-muted hover:text-ink border border-line hover:border-ink/30
-                               rounded-full px-3 py-1 transition truncate max-w-[10rem] sm:max-w-[14rem]"
-                    title={s}
-                  >
-                    {s}
-                  </button>
-                ))}
+                {mode === "text" &&
+                  SAMPLES.map((s, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setText(s)}
+                      className="text-xs text-muted hover:text-ink border border-line hover:border-ink/30
+                                 rounded-full px-3 py-1 transition truncate max-w-[10rem] sm:max-w-[14rem]"
+                      title={s}
+                    >
+                      {s}
+                    </button>
+                  ))}
               </div>
 
               <button
                 onClick={submit}
-                disabled={loading || !text.trim()}
+                disabled={loading || !content}
                 className="shrink-0 rounded-full bg-ink text-paper text-sm font-medium px-5 py-2.5
                            transition hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
               >
@@ -95,7 +141,7 @@ export default function Home() {
           </div>
 
           <p className="mt-8 text-xs text-muted/70 font-mono">
-            v1 · text only · powered by NVIDIA NIM
+            text · url · image · powered by NVIDIA NIM
           </p>
         </div>
       </div>
