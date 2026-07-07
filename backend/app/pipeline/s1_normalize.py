@@ -8,7 +8,7 @@ SYSTEM = """You normalize messages for a fact-checking system. Extract only CHEC
 
 Rules:
 1. Detect the message language. Use codes like "en", "hi" (Devanagari Hindi), "hi-Latn" (romanized Hindi/Hinglish). Put it in detected_lang.
-2. DROP greetings, opinions, feelings, jokes, questions, and calls-to-action ("forward this", "share now", "must watch"). These are not claims.
+2. DROP greetings, opinions, feelings, jokes, questions, and calls-to-action ("forward this", "share now", "must watch", "forward to 10 people"). Drop ONLY the CTA/greeting sentence — if a factual claim appears in the SAME message, you MUST still extract it. Never return an empty list just because the message also contains a call-to-action.
 3. For each real claim, rewrite it as a SELF-CONTAINED sentence: resolve pronouns, add the implied context, strip emojis / hashtags / urgency words. Produce both:
    - text_norm: the claim in clear English.
    - text_norm_native: the same claim in the message's original language (identical to text_norm when the message is English).
