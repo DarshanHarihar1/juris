@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 
 from ..config import role, thresholds
 from ..models import ClaimQuestions, QASource, QuestionAnswer
-from ..services import credibility, events, nim, tools
+from ..services import credibility, events, nim, search, tools
 
 log = logging.getLogger("juris.s3")
 
@@ -88,6 +88,21 @@ async def _decompose(claim_en: str, claim_native: str) -> ClaimQuestions:
     return ClaimQuestions(questions=[claim_en], time_sensitive=False)
 
 
+async def _seed_search(question: str) -> str:
+    """Run a recency=week search and return top-3 results as a formatted string."""
+    results = await search.web_search(question, recency="week")
+    if not results:
+        return ""
+    lines = []
+    for r in results[:3]:
+        lines.append(
+            f"- URL: {r['url']}\n"
+            f"  Title: {r.get('title', '')}\n"
+            f"  Snippet: {r.get('snippet', '')}"
+        )
+    return "Seed search results (recency=week — use fetch_page on the most relevant URL):\n" + "\n".join(lines)
+
+
 async def _answer_question(
     question: str, claim_en: str, claim_native: str,
     model: str, tool_names: list[str], time_sensitive: bool,
@@ -96,13 +111,14 @@ async def _answer_question(
     cap = thresholds().get("max_tool_calls_per_investigator", 3)
     avail = [t for t in tool_names if t in tools.REGISTRY]
     schemas = tools.schemas(avail)
-    recency_hint = '\n(Use recency="month" in web_search — this is time-sensitive.)' if time_sensitive else ""
+    seed = (await _seed_search(question)) if time_sensitive else ""
+    seed_block = f"\n\n{seed}" if seed else ""
     messages: list[dict] = [
         {"role": "system", "content": QA_SYSTEM.format(cap=cap, today=date.today().isoformat())},
         {"role": "user", "content": (
             f'Claim (English): "{claim_en}"\n'
             f'Claim (native): "{claim_native}"\n'
-            f'Question to answer: "{question}"{recency_hint}'
+            f'Question to answer: "{question}"{seed_block}'
         )},
     ]
     executed = 0
