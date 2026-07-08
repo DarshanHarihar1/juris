@@ -8,8 +8,6 @@ import sys
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from urllib.parse import parse_qs
-
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -98,16 +96,40 @@ async def get_verdict(slug: str):
     return json.loads(row["card"])
 
 
+@app.get("/webhooks/whatsapp")
+async def whatsapp_verify(request: Request):
+    """Meta Cloud API webhook subscription handshake (LLD §8): echo hub.challenge iff the
+    verify token matches. No-op (404) for Twilio, which has no GET handshake."""
+    challenge = whatsapp.adapter.verify_challenge(dict(request.query_params))
+    if challenge is None:
+        raise HTTPException(403, "verification failed")
+    return Response(challenge, media_type="text/plain")
+
+
+async def _ack(reply_to: str, text: str) -> Response:
+    """Reply to an inbound message the way the active provider expects: Twilio takes it
+    inline as TwiML; Meta 200s the webhook and pushes the text via the send API."""
+    if whatsapp.adapter.synchronous_ack:
+        return Response(whatsapp.ack_twiml(text), media_type="application/xml")
+    await whatsapp.adapter.send(reply_to, text)
+    return Response(status_code=200)
+
+
 @app.post("/webhooks/whatsapp")
 async def whatsapp_webhook(request: Request):
-    """Twilio WhatsApp sandbox inbound (LLD §8). Enqueues a job and acks synchronously via
-    TwiML — no outbound API call for the ack. The verdict is pushed later by the worker.
-    ponytail: stdlib parse_qs handles the form-encoded body (no python-multipart dep). Raw
-    wa_id/From are used here but never logged or persisted un-hashed (§35)."""
-    form = {k: v[0] for k, v in parse_qs((await request.body()).decode()).items()}
-    msg = whatsapp.adapter.parse_inbound(form)
+    """Inbound WhatsApp message (LLD §8). Enqueues a job and acks the sender; the verdict is
+    pushed later by the worker. Provider-agnostic via whatsapp.adapter — Meta (JSON, signed,
+    out-of-band ack) and Twilio (form-encoded, TwiML) both parse down to one InboundMsg.
+    Raw wa_id/From are used here but never logged or persisted un-hashed (§35)."""
+    raw = await request.body()
+    if not whatsapp.adapter.signature_ok(raw, request.headers):
+        raise HTTPException(403, "bad signature")
+    msg = whatsapp.adapter.parse_inbound(whatsapp.adapter.parse_body(raw))
+    # Meta also POSTs delivery/read statuses and non-text media here — nothing to verify, ack 200.
+    if msg is None:
+        return Response(status_code=200)
 
-    # "R" → forwardable rebuttal for this user's most recent verdict, replied inline via TwiML.
+    # "R" → forwardable rebuttal for this user's most recent verdict.
     if msg.text.upper() == "R":
         async with (await db.pool()).acquire() as con:
             row = await con.fetchrow(
@@ -118,7 +140,7 @@ async def whatsapp_webhook(request: Request):
                 whatsapp.hash_waid(msg.wa_id))
         rebuttal = (json.loads(row["card"]).get("rebuttal_card_native") if row
                     else None) or "No recent verdict yet — send a claim to fact-check first."
-        return Response(whatsapp.ack_twiml(rebuttal), media_type="application/xml")
+        return await _ack(msg.reply_to, rebuttal)
 
     async with (await db.pool()).acquire() as con:
         async with con.transaction():
@@ -135,9 +157,7 @@ async def whatsapp_webhook(request: Request):
                     "insert into wa_inbound (message_sid, job_id) values ($1, $2)", msg.msg_sid, job_id)
 
     trial_url = f"{config.public_base_url()}/trial/{job_id}"
-    return Response(
-        whatsapp.ack_twiml(f"🔍 Juris is investigating — watch the live trial: {trial_url}"),
-        media_type="application/xml")
+    return await _ack(msg.reply_to, f"🔍 Juris is investigating — watch the live trial: {trial_url}")
 
 
 @app.post("/api/media")

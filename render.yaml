@@ -24,8 +24,21 @@ services:
         sync: false
       - key: GOOGLE_FACTCHECK_API_KEY
         sync: false
-      # WhatsApp (Phase 7). Twilio creds + the wa_id hash salt — all secret, set once in
-      # the Render dashboard. WA_HASH_SALT MUST stay constant (it keys the per-user hash).
+      # WhatsApp (Phase 7). Meta Cloud API is the default provider; set WHATSAPP_PROVIDER=twilio
+      # to fall back to the old sandbox. All creds secret, set once in the Render dashboard.
+      # WA_HASH_SALT MUST stay constant (it keys the per-user hash).
+      - key: WHATSAPP_PROVIDER          # "meta" (default) | "twilio"
+        value: meta
+      # --- Meta Cloud API (graph.facebook.com) ---
+      - key: WHATSAPP_ACCESS_TOKEN      # permanent system-user token
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID   # sender phone number id (not the display number)
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN      # your choice; must match the value entered in the Meta webhook config
+        sync: false
+      - key: WHATSAPP_APP_SECRET        # app secret — validates X-Hub-Signature-256 on inbound POSTs
+        sync: false
+      # --- Twilio sandbox (only used when WHATSAPP_PROVIDER=twilio) ---
       - key: TWILIO_ACCOUNT_SID
         sync: false
       - key: TWILIO_AUTH_TOKEN

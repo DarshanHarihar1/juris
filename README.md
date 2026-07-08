@@ -234,7 +234,7 @@ tested, and live-verified end-to-end.
 | 4 | [Verdict Engine](design/phase-4-verdict-engine.md) | S4 fast-path jury + agreement, S5 trial, citation validator |
 | 5 | [Synthesis & Output](design/phase-5-synthesis-output.md) | S6 verdict card (text), rebuttal, manipulation tags, permalink |
 | 6 | [Live Courtroom UI](design/phase-6-frontend.md) | Next.js app, Supabase Realtime stream, courtroom view, permalink page |
-| 7 | [WhatsApp, Eval & Demo](design/phase-7-whatsapp-eval-demo.md) | Twilio WhatsApp adapter, golden-claim eval, `/stats`, demo video — **not started** |
+| 7 | [WhatsApp, Eval & Demo](design/phase-7-whatsapp-eval-demo.md) | WhatsApp adapter (Meta Cloud API, Twilio fallback), golden-claim eval, `/stats`, demo video |
 
 ## Known v1 limitations
 - **Text only** — image/audio/URL submission returns `501` (`POST /api/media`).

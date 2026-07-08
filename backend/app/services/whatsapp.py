@@ -5,6 +5,8 @@ Privacy (non-negotiable, §35): only a salted hash of wa_id is ever stored/logge
 raw reply address lives on `submissions.reply_to` for the in-flight job and is nulled
 after the verdict is sent — it never reaches events_log (which the public UI reads)."""
 import hashlib
+import hmac
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -14,6 +16,7 @@ import httpx
 from ..config import public_base_url
 
 _TWILIO_MSGS = "https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+_META_GRAPH = "https://graph.facebook.com/{ver}/{phone_id}/messages"
 _E_TAG = re.compile(r"\s*\[e:[^\]]+\]")   # citation tags — stripped for the forwardable text
 _EMOJI = {"TRUE": "✅", "FALSE": "❌", "MISLEADING": "⚠️", "CONFLICTING": "⚠️", "UNVERIFIABLE": "❓"}
 
@@ -59,9 +62,21 @@ def format_verdict(cards: list[dict]) -> str:
 
 
 class TwilioWhatsApp:
-    """Twilio WhatsApp sandbox adapter (form-encoded webhook + REST send)."""
+    """Twilio WhatsApp sandbox adapter (form-encoded webhook + synchronous TwiML ack)."""
 
-    def parse_inbound(self, form: dict) -> InboundMsg:
+    synchronous_ack = True   # Twilio takes the reply inline in the webhook response (TwiML)
+
+    def parse_body(self, raw: bytes) -> dict:
+        from urllib.parse import parse_qs
+        return {k: v[0] for k, v in parse_qs(raw.decode()).items()}
+
+    def verify_challenge(self, params: dict) -> str | None:
+        return None          # Twilio has no GET subscription handshake
+
+    def signature_ok(self, raw: bytes, headers) -> bool:
+        return True          # Twilio uses X-Twilio-Signature (not validated in v1)
+
+    def parse_inbound(self, form: dict) -> InboundMsg | None:
         frm = form.get("From", "")
         return InboundMsg(
             wa_id=form.get("WaId", ""), reply_to=frm,
@@ -79,24 +94,74 @@ class TwilioWhatsApp:
 
 
 class MetaWhatsApp:
-    """Meta Cloud API adapter — parse only for now (post-hackathon swap, LLD §8).
-    ponytail: send() lands when Meta approval does; parse_inbound exists so the webhook
-    handler and its unit test are already provider-agnostic."""
+    """Meta WhatsApp Cloud API adapter (official Graph API).
 
-    def parse_inbound(self, payload: dict) -> InboundMsg:
-        msg = payload["entry"][0]["changes"][0]["value"]["messages"][0]
+    Two mechanics differ from Twilio (LLD §8):
+      • Webhook is verified once by a GET handshake (hub.challenge) and every POST is
+        signed (X-Hub-Signature-256, HMAC-SHA256 over the raw body with the app secret).
+      • There is no synchronous reply — the webhook must 200 fast; every message (including
+        the ack) is pushed via POST /messages. Free-form text is allowed inside the 24h
+        customer-service window, which our reply-to-an-inbound-claim flow always sits in."""
+
+    synchronous_ack = False   # Meta replies out-of-band via the send API, not in the webhook body
+
+    def parse_body(self, raw: bytes) -> dict:
+        return json.loads(raw or b"{}")
+
+    def verify_challenge(self, params: dict) -> str | None:
+        """GET subscription handshake: echo hub.challenge iff the verify token matches."""
+        if params.get("hub.mode") == "subscribe" and \
+                params.get("hub.verify_token") == os.environ.get("WHATSAPP_VERIFY_TOKEN"):
+            return params.get("hub.challenge")
+        return None
+
+    def signature_ok(self, raw: bytes, headers) -> bool:
+        """Validate X-Hub-Signature-256. Skipped only if no app secret is configured
+        (local/dev); in prod WHATSAPP_APP_SECRET must be set so spoofed POSTs are rejected."""
+        secret = os.environ.get("WHATSAPP_APP_SECRET")
+        if not secret:
+            return True
+        got = headers.get("X-Hub-Signature-256", "")
+        want = "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(want, got)
+
+    def parse_inbound(self, payload: dict) -> InboundMsg | None:
+        """Extract the first inbound text message. Returns None for the non-message
+        callbacks Meta also delivers here (delivery/read statuses, non-text media)."""
+        try:
+            msg = payload["entry"][0]["changes"][0]["value"]["messages"][0]
+        except (KeyError, IndexError, TypeError):
+            return None
+        if "text" not in msg:                       # image/audio/status → nothing to verify
+            return None
         wa_id = msg.get("from", "")
         return InboundMsg(
             wa_id=wa_id, reply_to=f"whatsapp:+{wa_id}",
             text=(msg.get("text", {}).get("body") or "").strip(), msg_sid=msg.get("id", ""),
         )
 
-    async def send(self, reply_to: str, body: str) -> None:  # pragma: no cover
-        raise NotImplementedError("Meta Cloud API send not wired yet (v1 uses Twilio sandbox)")
+    async def send(self, reply_to: str, body: str) -> None:
+        token = os.environ["WHATSAPP_ACCESS_TOKEN"]
+        phone_id = os.environ["WHATSAPP_PHONE_NUMBER_ID"]
+        ver = os.environ.get("WHATSAPP_API_VERSION", "v21.0")
+        to = re.sub(r"\D", "", reply_to)            # "whatsapp:+919..." → "919..." (E.164 digits)
+        url = _META_GRAPH.format(ver=ver, phone_id=phone_id)
+        async with httpx.AsyncClient(timeout=15) as cx:
+            r = await cx.post(
+                url, headers={"Authorization": f"Bearer {token}"},
+                json={"messaging_product": "whatsapp", "recipient_type": "individual",
+                      "to": to, "type": "text", "text": {"preview_url": True, "body": body}})
+            r.raise_for_status()
 
 
-# Active adapter. Swap to MetaWhatsApp() when Cloud API approval lands — one line.
-adapter: TwilioWhatsApp | MetaWhatsApp = TwilioWhatsApp()
+def _select_adapter() -> "TwilioWhatsApp | MetaWhatsApp":
+    """Provider chosen by WHATSAPP_PROVIDER (default 'meta'; 'twilio' for the old sandbox)."""
+    return TwilioWhatsApp() if os.environ.get("WHATSAPP_PROVIDER", "meta").lower() == "twilio" \
+        else MetaWhatsApp()
+
+
+# Active adapter, selected at import from the environment.
+adapter: TwilioWhatsApp | MetaWhatsApp = _select_adapter()
 
 
 async def deliver_verdicts(con, submission_id, reply_to: str) -> None:
@@ -107,7 +172,6 @@ async def deliver_verdicts(con, submission_id, reply_to: str) -> None:
         submission_id,
     )
     if rows:
-        import json
         cards = [json.loads(r["card"]) for r in rows]
         await adapter.send(reply_to, format_verdict(cards))
     await _clear_reply_to(con, submission_id)
@@ -128,10 +192,17 @@ if __name__ == "__main__":  # self-check: parsing + privacy + formatting, no net
     tw = TwilioWhatsApp().parse_inbound(
         {"WaId": "919876543210", "From": "whatsapp:+919876543210", "Body": " hi ", "MessageSid": "SM1"})
     assert tw == InboundMsg("919876543210", "whatsapp:+919876543210", "hi", "SM1"), tw
-    mt = MetaWhatsApp().parse_inbound(
+    meta = MetaWhatsApp()
+    mt = meta.parse_inbound(
         {"entry": [{"changes": [{"value": {"messages": [
             {"from": "919876543210", "id": "wamid.X", "text": {"body": "hi"}}]}}]}]})
     assert mt.wa_id == tw.wa_id and mt.text == "hi", mt        # same shape from both providers
+    assert meta.parse_inbound(                                 # status callback → nothing to verify
+        {"entry": [{"changes": [{"value": {"statuses": [{"status": "read"}]}}]}]}) is None
+    os.environ["WHATSAPP_VERIFY_TOKEN"] = "vt"
+    assert meta.verify_challenge(
+        {"hub.mode": "subscribe", "hub.verify_token": "vt", "hub.challenge": "42"}) == "42"
+    assert meta.verify_challenge({"hub.mode": "subscribe", "hub.verify_token": "no"}) is None
     h = hash_waid("919876543210")
     assert len(h) == 64 and "919876543210" not in h, "raw wa_id must not survive in the hash"
     assert hash_waid("919876543210") == h, "hash must be stable per user"
