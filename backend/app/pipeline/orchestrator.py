@@ -124,4 +124,4 @@ async def run(job: dict) -> None:
 
         # All claims decided — push the verdict card(s) back over WhatsApp and clear reply_to.
         if _wa(sub):
-            await whatsapp.deliver_verdicts(con, submission_id, sub["reply_to"])
+            await whatsapp.deliver_verdicts(con, job_id, submission_id, sub["reply_to"])

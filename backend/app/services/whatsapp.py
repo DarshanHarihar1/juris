@@ -164,15 +164,22 @@ def _select_adapter() -> "TwilioWhatsApp | MetaWhatsApp":
 adapter: TwilioWhatsApp | MetaWhatsApp = _select_adapter()
 
 
-async def deliver_verdicts(con, submission_id, reply_to: str) -> None:
-    """Push all finished verdict cards for a submission, then clear the reply address."""
+async def deliver_verdicts(con, job_id, submission_id, reply_to: str) -> None:
+    """Push all finished verdict cards for a job, then clear the reply address.
+
+    Sourced from events_log, not the `verdicts` table: an S2 cache hit reuses an existing
+    verdict card without inserting a new `verdicts` row for the new claim_id (the ponytail
+    note in orchestrator.py calls this out — it re-emits the card "as-is"), so querying
+    `verdicts` by this submission's claim_id silently misses cache-hit claims and no
+    WhatsApp message is ever sent, even though the job completes with no error. events_log
+    has a `verdict` event for every path (cache/precedent/consensus/trial) — the same feed
+    the live courtroom UI reads — so it's the correct source of truth for delivery too."""
     rows = await con.fetch(
-        """select v.card from verdicts v join claims c on c.id = v.claim_id
-           where c.submission_id = $1 order by v.created_at""",
-        submission_id,
+        "select data from events_log where job_id = $1 and event = 'verdict' order by id",
+        job_id,
     )
     if rows:
-        cards = [json.loads(r["card"]) for r in rows]
+        cards = [json.loads(r["data"]) for r in rows]
         await adapter.send(reply_to, format_verdict(cards))
     await _clear_reply_to(con, submission_id)
 
