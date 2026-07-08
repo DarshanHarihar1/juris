@@ -80,9 +80,14 @@ async def run(con, job_id, claim_id, claim: str, evidence: list[dict]) -> dict:
                 searched[name] = True
                 hits = await search.web_search(arg.search_query)
                 if hits:
-                    evidence_text += "\n" + "\n".join(
-                        f"[e:x{i}] {h.get('domain')}: {h.get('title') or ''} — {h.get('snippet') or ''}"
-                        for i, h in enumerate(hits[:3], 1))
+                    # fetch top result for real content; fall back to snippet if fetch fails
+                    top_url = hits[0].get("url", "")
+                    fetched = await search.fetch_page(top_url) if top_url else {}
+                    extra = []
+                    for i, h in enumerate(hits[:2], 1):
+                        body = (fetched.get("text", "")[:400] if i == 1 and fetched else None) or h.get("snippet") or ""
+                        extra.append(f"[e:x{i}] {h.get('domain')}: {h.get('title') or ''} — {body}")
+                    evidence_text += "\n" + "\n".join(extra)
         if expedited:
             break
 

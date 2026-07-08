@@ -38,14 +38,21 @@ POST /api/verify
       │                            │
       │                            └─ no hit → continue
       ▼
- S3  Investigate        2 tool-using agents (different model families) run parallel
-      │                 ReAct loops — web_search, factcheck_search, source_credibility —
-      │                 capped at 3 tool calls each, ≥1 disconfirming query required.
-      │                 Evidence deduped by URL, stance + credibility scored.
+ S3  Investigate        Claim decomposed into ≤3 focused sub-questions. Two
+      │                 tool-using agents (different model families) answer each
+      │                 question in parallel: web_search/factcheck_search to find
+      │                 candidates, fetch_page to read actual page content, then
+      │                 a grounded answer + cited sources. Evidence rows carry
+      │                 question/answer/answerable instead of a stance label.
+      │                 Credibility is deterministic (domain table, never model-set).
       ▼
- S4  Fast-path jury     3 jurors (different families) read the evidence log (no
-      │                 browsing) and vote. Confidence-weighted plurality ≥ 0.75
-      │                 agreement → resolved by consensus.
+ S4  Fast-path jury     3 jurors (different families) read the QA evidence log —
+      │                 answered sub-questions, not snippet strings. Each juror
+      │                 declares a PRIOR (own knowledge + confidence) before reading
+      │                 evidence, then arbitrates: evidence governs when it directly
+      │                 addresses the claim; a confident unanimous prior governs when
+      │                 evidence is thin; both weak → UNVERIFIABLE (1b gate).
+      │                 Confidence-weighted plurality ≥ 0.75 → consensus.
       │                    │
       │                    └─ jury splits → escalate
       ▼                         │
@@ -244,6 +251,23 @@ tested, and live-verified end-to-end.
 - **No PNG export** — verdict cards are text-only (WhatsApp message + web page).
 - **Free-tier cold starts** — Render's free web services and SearXNG spin down
   after ~15 min idle; the first request after that takes ~30–60s.
+
+## Research foundations
+
+The QA-decomposition pipeline is grounded in published work on retrieval-augmented
+fact-checking. Key references:
+
+| Paper | What we took from it |
+|---|---|
+| [RAGAR — RAG-Augmented Reasoning for Political Fact-Checking](https://arxiv.org/html/2404.12065v1) | CoRAG / ToRAG: decompose claim into sub-questions, answer each from retrieved evidence, derive verdict from answers — the core 3b pattern |
+| [PAVE — Arbitration Behavior over Prior-Context Discrepancy](https://arxiv.org/pdf/2606.01120) | Formalises the conflict between parametric (model) knowledge and retrieved evidence; defines the four knowledge-boundary categories and arbitration profiles used in the S4 juror prompt |
+| [SURE-RAG — Sufficiency and Uncertainty-Aware Evidence Verification](https://arxiv.org/pdf/2605.03534) | Evidence-sufficiency gating: abstain (UNVERIFIABLE) when retrieved evidence doesn't address the claim; basis of the S4 1b gate |
+| [Leveraging LLM Parametric Knowledge for Fact-Checking without Retrieval](https://arxiv.org/abs/2603.05471) | LLMs encode substantial factual knowledge; retrieval-only pipelines leave this unused and break on "obviously true" claims that have no fact-check articles |
+| [Insist when Know, Caution when Not Know](https://openreview.net/forum?id=VgEEl1UDlg) | LLMs naturally resist conflicting evidence when confident; basis for the prior-confidence arbitration rule in S4 jurors |
+| [Resolving Conflicting Evidence in Automated Fact-Checking (CONFACT, IJCAI-25)](https://arxiv.org/html/2505.17762v1) | Source-aware conflict resolution; notes RAG pipelines are especially vulnerable to injected misinformation in augmented context |
+| [SemanticCite — Citation Verification via Full-Text Analysis](https://arxiv.org/pdf/2511.16198) | "Reverse RAG" traceability: every claim must trace back to its source document; basis for grounding S3 answers in fetched page content rather than search snippets |
+| [OpenFactCheck — Unified Framework for LLM Factuality Evaluation](https://arxiv.org/pdf/2408.11832) | ~89–94 % of real-world claims are TRUE; professional fact-checkers don't write articles about true things — key insight explaining why retrieval-only pipelines fail on common-knowledge claims |
+| [Fact-Checking with LLMs via Probabilistic Certainty and Consistency](https://arxiv.org/html/2601.02574) | Certainty-gated retrieval: if model is decisive and self-consistent from parametric knowledge, skip retrieval (deferred to Phase 2 as 3a) |
 
 ## Global conventions
 - **Models:** all via NVIDIA NIM (`https://integrate.api.nvidia.com/v1`,

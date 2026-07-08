@@ -1,74 +1,106 @@
-"""S3 Investigation (LLD §5-S3). On a cache/precedent miss, two tool-using
-investigators from different model families run ReAct loops in parallel (≤3 tool
-calls each), then emit a deduped, stance-tagged, credibility-scored evidence log.
-Evidence, not verdicts.
+"""S3 Investigation — QA-decomposition mode (Phase 3b).
 
-Evidence dicts match the `evidence` table: url, domain, title, snippet, stance
-(supports|refutes|mentions|context), credibility (deterministic, from the domain —
-never trusted from the model), found_by (the investigator's model id)."""
+Flow:
+  1. Decompose: claim → ≤3 focused sub-questions (+ time_sensitive flag).
+  2. Answer: for each question, both investigators (different families) run a
+     ReAct loop: web_search/factcheck_search to find candidates, fetch_page to
+     read the actual page, then output a grounded answer + sources.
+     All (question × investigator) tasks run in parallel.
+  3. Assemble: one evidence row per (question, source URL). Credibility is
+     deterministic (domain table, never model-set). Dedup by (question, url).
+
+Evidence rows carry question/answer/answerable instead of a stance label.
+S4 jurors receive the answered-question log; they no longer judge stance-tagged
+snippet strings they never read.
+"""
 import asyncio
 import json
 import logging
 from urllib.parse import urlparse
 
 from ..config import role, thresholds
+from ..models import ClaimQuestions, QASource, QuestionAnswer
 from ..services import credibility, events, nim, tools
 
 log = logging.getLogger("juris.s3")
 
-STANCES = {"supports", "refutes", "mentions", "context"}
-INVESTIGATOR_BUDGET = 120.0  # wall-clock cap per investigator; timeout → graceful skip
+INVESTIGATOR_BUDGET = 120.0  # wall-clock cap for ALL question-answering; split across questions
 
-SYSTEM = """You are a fact-checking INVESTIGATOR. Gather EVIDENCE, do NOT reach a verdict.
+DECOMPOSE_SYSTEM = """You are a claim analyst. Break the claim into AT MOST 3 specific,
+self-contained factual sub-questions whose answers together would verify or refute it.
+Each question must be answerable from a single web search.
+Set time_sensitive=true if answers depend on who/what is current right now.
+
+Output ONLY JSON: {"questions": ["..."], "time_sensitive": false}"""
+
+QA_SYSTEM = """You are a fact-checking INVESTIGATOR. Answer the question below using web evidence.
 
 Rules:
-- Use the search tools to find real sources (news, human fact-checks, official pages) about the claim.
-- Search in BOTH English and the claim's native language when they differ.
-- Run at LEAST ONE query intended to DISCONFIRM your current leaning (bias hygiene): actively look for sources that would prove the claim TRUE if you suspect it false, and vice-versa.
-- You may call tools AT MOST {cap} times total, then STOP and output your evidence log.
+- Use web_search or factcheck_search to find relevant pages.
+- Use fetch_page on the 1–2 most relevant URLs to read what those pages actually say.
+- Base your answer ONLY on what the fetched pages contain — not your own knowledge.
+- Include in "sources" every URL you actually fetched or found via search.
+- If no fetched page directly answers the question, set answerable to false and answer "".
+- You may call tools AT MOST {cap} times total, then output your JSON.
 
-Output ONLY a JSON object, no prose:
-{{"evidence": [{{"url": "...", "title": "...", "snippet": "...", "stance": "supports|refutes|mentions|context"}}]}}
-`stance` is the SOURCE's stance toward the claim. Include only sources you actually found via tools."""
+Output ONLY JSON:
+{{"question": "...", "answer": "...", "answerable": true, "sources": [{{"url": "...", "title": "...", "snippet": "..."}}]}}"""
 
 
 def _extract_json(text: str) -> dict:
-    """Best-effort parse of a model reply that should be a JSON object (may be fenced)."""
     t = (text or "").strip()
     if t.startswith("```"):
         t = t.strip("`")
         t = t[4:].strip() if t.lower().startswith("json") else t.strip()
     try:
-        obj = json.loads(t)
-        return obj if isinstance(obj, dict) else {}
+        return json.loads(t)
     except json.JSONDecodeError:
         i, j = t.find("{"), t.rfind("}")
-        if 0 <= i < j:
+        if i >= 0 and j > i:
             try:
                 return json.loads(t[i:j + 1])
             except json.JSONDecodeError:
-                return {}
-        return {}
+                pass
+    return {}
 
 
 def _domain(url: str) -> str:
     return (urlparse(url).netloc or "").lower().removeprefix("www.")
 
 
-async def _investigate_one(claim_en: str, claim_native: str, model: str,
-                           tool_names: list[str]) -> tuple[list[dict], list[dict]]:
-    """One investigator's ReAct loop. Returns (raw evidence items, tool-call log).
-    Hard-caps tool executions at `max_tool_calls_per_investigator` — extra tool calls
-    the model requests beyond the budget get a stub response, never a real fn call."""
-    cap = thresholds().get("max_tool_calls_per_investigator", 3)
-    tool_names = [t for t in tool_names if t in tools.REGISTRY]     # drop deferred tools (numeric_check)
-    schemas = tools.schemas(tool_names)
-    messages: list[dict] = [
-        {"role": "system", "content": SYSTEM.format(cap=cap)},
+async def _decompose(claim_en: str, claim_native: str) -> ClaimQuestions:
+    messages = [
+        {"role": "system", "content": DECOMPOSE_SYSTEM},
         {"role": "user", "content": f'Claim (English): "{claim_en}"\nClaim (native): "{claim_native}"'},
     ]
+    try:
+        resp = await nim.call("decomposer", messages, response_schema=ClaimQuestions)
+        obj = resp.parsed
+        if obj and obj.questions:
+            return obj
+    except Exception as e:
+        log.warning("decompose failed: %s", e)
+    return ClaimQuestions(questions=[claim_en], time_sensitive=False)
+
+
+async def _answer_question(
+    question: str, claim_en: str, claim_native: str,
+    model: str, tool_names: list[str], time_sensitive: bool,
+) -> QuestionAnswer | None:
+    """One investigator's ReAct loop to answer a single sub-question."""
+    cap = thresholds().get("max_tool_calls_per_investigator", 3)
+    avail = [t for t in tool_names if t in tools.REGISTRY]
+    schemas = tools.schemas(avail)
+    recency_hint = '\n(Use recency="month" in web_search — this is time-sensitive.)' if time_sensitive else ""
+    messages: list[dict] = [
+        {"role": "system", "content": QA_SYSTEM.format(cap=cap)},
+        {"role": "user", "content": (
+            f'Claim (English): "{claim_en}"\n'
+            f'Claim (native): "{claim_native}"\n'
+            f'Question to answer: "{question}"{recency_hint}'
+        )},
+    ]
     executed = 0
-    tool_log: list[dict] = []
     final_text = ""
     for _ in range(cap + 1):
         remaining = cap - executed
@@ -76,56 +108,66 @@ async def _investigate_one(claim_en: str, claim_native: str, model: str,
         if not (getattr(msg, "tool_calls", None) and remaining > 0):
             final_text = msg.content or ""
             break
-        messages.append(msg.model_dump(exclude_none=True))         # assistant turn (carries tool_calls)
+        messages.append(msg.model_dump(exclude_none=True))
         for tc in msg.tool_calls:
+            if executed >= cap:
+                break
+            executed += 1
             args = _extract_json(tc.function.arguments) if tc.function.arguments else {}
-            if executed < cap:
-                executed += 1
-                tool_log.append({"tool": tc.function.name, "args": args})
-                try:
-                    result = await tools.call_tool(tc.function.name, **args)
-                except Exception as e:                             # bad args / provider down → feed error back
-                    result = {"error": str(e)}
-            else:
-                result = {"error": "tool budget exhausted"}        # must still answer every tool_call_id
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result)[:4000]})
+            try:
+                result = await tools.call_tool(tc.function.name, **args)
+            except Exception as e:
+                result = {"error": str(e)}
+            messages.append({"role": "tool", "tool_call_id": tc.id,
+                             "content": json.dumps(result)[:4000]})
     else:
-        # used every turn still wanting tools → force the evidence log out
-        msg = await nim.chat(model, messages + [
-            {"role": "user", "content": "Tool limit reached. Output your evidence log JSON now."}], tools=None)
+        # exhausted turns without a final text — force one
+        msg = await nim.chat(model, messages + [{"role": "user", "content": "Output your answer JSON now."}], tools=None)
         final_text = msg.content or ""
 
-    items = _extract_json(final_text).get("evidence", [])
-    return (items if isinstance(items, list) else []), tool_log
+    raw = _extract_json(final_text)
+    if not raw:
+        return None
+
+    sources = [
+        QASource(url=s.get("url", ""), title=s.get("title", ""), snippet=s.get("snippet", ""))
+        for s in raw.get("sources", [])
+        if isinstance(s, dict) and s.get("url")
+    ]
+    return QuestionAnswer(
+        question=question,
+        answer=raw.get("answer", ""),
+        answerable=bool(raw.get("answerable", True)),
+        sources=sources,
+    )
 
 
-def _finalize(raw_items: list[dict], model: str) -> list[dict]:
-    """Coerce raw model items → valid evidence dicts. Credibility is computed from the
-    domain (deterministic); an invalid/missing stance is repaired to neutral 'mentions'."""
-    out: list[dict] = []
-    for it in raw_items:
-        if not isinstance(it, dict):
-            continue
-        url = (it.get("url") or "").strip()
+def _to_evidence_rows(qa: QuestionAnswer, found_by: str) -> list[dict]:
+    """Expand one QuestionAnswer into one evidence row per source URL."""
+    rows = []
+    for src in (qa.sources or []):
+        url = (src.url or "").strip()
         if not url:
             continue
-        stance = str(it.get("stance", "")).lower().strip()
-        if stance not in STANCES:
-            stance = "mentions"
         dom = _domain(url)
-        out.append({
+        rows.append({
             "url": url, "domain": dom,
-            "title": it.get("title"), "snippet": it.get("snippet"),
-            "stance": stance, "credibility": credibility.score(dom), "found_by": model,
+            "title": src.title or "", "snippet": src.snippet or "",
+            "stance": None,  # QA mode: no document-level stance
+            "credibility": credibility.score(dom),
+            "found_by": found_by,
+            "question": qa.question,
+            "answer": qa.answer,
+            "answerable": qa.answerable,
         })
-    return out
+    return rows
 
 
 def _dedup(items: list[dict]) -> list[dict]:
-    """Collapse by URL across investigators, keeping the higher-credibility copy."""
-    best: dict[str, dict] = {}
+    """Collapse by (question, url) keeping higher-credibility copy per pair."""
+    best: dict[tuple, dict] = {}
     for it in items:
-        key = it["url"].rstrip("/")
+        key = (it.get("question", ""), (it.get("url") or "").rstrip("/"))
         cur = best.get(key)
         if cur is None or (it.get("credibility") or 0) > (cur.get("credibility") or 0):
             best[key] = it
@@ -133,35 +175,81 @@ def _dedup(items: list[dict]) -> list[dict]:
 
 
 async def investigate(con, job_id, claim_id, claim_en: str, claim_native: str) -> list[dict]:
-    """Run both investigators in parallel, persist deduped evidence, emit `evidence`
-    events. One investigator erroring out does not sink the other (graceful degradation)."""
-    await events.emit(job_id, "stage", {"stage": "S3_INVESTIGATE", "status": "started", "claim_id": str(claim_id)})
+    """Decompose claim, answer sub-questions across both investigator families in
+    parallel, persist grounded evidence rows, emit events."""
+    await events.emit(job_id, "stage", {"stage": "S3_INVESTIGATE", "status": "started",
+                                        "claim_id": str(claim_id)})
+
+    # Step 1: decompose
+    decomposed = await _decompose(claim_en, claim_native)
+    max_q = thresholds().get("max_questions", 3)
+    questions = decomposed.questions[:max_q]
+    log.info("job=%s claim=%s questions=%s time_sensitive=%s",
+             job_id, claim_id, questions, decomposed.time_sensitive)
+
     investigators = role("investigators")
-    results = await asyncio.gather(
-        *[asyncio.wait_for(
-            _investigate_one(claim_en, claim_native, inv["model"], inv.get("tools", [])),
-            timeout=INVESTIGATOR_BUDGET,
-        ) for inv in investigators],
-        return_exceptions=True,   # a TimeoutError/provider error on one → skipped, other still persists
-    )
-    merged: list[dict] = []
-    for inv, res in zip(investigators, results):
+    per_q_budget = INVESTIGATOR_BUDGET / max(len(questions), 1)
+
+    # Step 2: answer all (question × investigator) tasks fully in parallel
+    tasks = [(q, inv) for q in questions for inv in investigators]
+    results = await asyncio.gather(*[
+        asyncio.wait_for(
+            _answer_question(
+                q, claim_en, claim_native,
+                inv["model"], inv.get("tools", []),
+                decomposed.time_sensitive,
+            ),
+            timeout=per_q_budget,
+        )
+        for q, inv in tasks
+    ], return_exceptions=True)
+
+    all_answers: list[tuple[QuestionAnswer, str]] = []
+    for (q, inv), res in zip(tasks, results):
         if isinstance(res, Exception):
-            log.warning("investigator %s failed: %s", inv["model"], res)
-            continue
-        items, _tool_log = res
-        merged += _finalize(items, inv["model"])
+            log.warning("investigator %s q=%r failed: %s", inv["model"], q, res)
+        elif res is not None:
+            all_answers.append((res, inv["model"]))
+
+    log.info("job=%s claim=%s answered %d/%d tasks", job_id, claim_id,
+             len(all_answers), len(tasks))
+
+    # Step 3: assemble + dedup evidence rows
+    merged: list[dict] = []
+    for qa, found_by in all_answers:
+        merged += _to_evidence_rows(qa, found_by)
+
+    # If investigators found nothing, add unanswerable placeholder so S4 can apply 1b gate
+    if not merged:
+        for q in questions:
+            merged.append({
+                "url": "", "domain": "", "title": "", "snippet": "",
+                "stance": None, "credibility": 0.0, "found_by": "none",
+                "question": q, "answer": "", "answerable": False,
+            })
 
     evidence = _dedup(merged)
+
+    # Step 4: persist rows that have a URL; placeholder (no-URL) rows stay in-memory only
     for ev in evidence:
+        if not ev.get("url"):
+            continue
         row_id = await con.fetchval(
-            """insert into evidence (claim_id, url, domain, title, snippet, stance, credibility, found_by)
-               values ($1, $2, $3, $4, $5, $6, $7, $8) returning id""",
-            claim_id, ev["url"], ev["domain"], ev["title"], ev["snippet"],
-            ev["stance"], ev["credibility"], ev["found_by"],
+            """insert into evidence
+               (claim_id, url, domain, title, snippet, stance, credibility, found_by,
+                question, answer, answerable)
+               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               returning id""",
+            claim_id,
+            ev["url"], ev["domain"],
+            ev.get("title") or None, ev.get("snippet") or None,
+            ev.get("stance"),
+            ev.get("credibility"), ev.get("found_by"),
+            ev.get("question"), ev.get("answer"), ev.get("answerable"),
         )
-        ev["id"] = str(row_id)                                     # so S4/S5 can cite [e:id]
-        await events.emit(job_id, "evidence", {"evidence_id": str(row_id), "claim_id": str(claim_id), **ev})
+        ev["id"] = str(row_id)
+        await events.emit(job_id, "evidence",
+                          {"evidence_id": str(row_id), "claim_id": str(claim_id), **ev})
 
     await events.emit(job_id, "stage", {"stage": "S3_INVESTIGATE", "status": "done",
                                         "claim_id": str(claim_id), "count": len(evidence)})

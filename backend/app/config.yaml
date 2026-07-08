@@ -3,11 +3,11 @@
 roles:
   embeddings:   { model: nvidia/nv-embedqa-e5-v5, dims: 1024 }  # 1024-dim; baai/bge-m3 500s on NIM. We embed the English text_norm pivot, so English-centric is fine.
   normalizer:   { model: meta/llama-3.1-8b-instruct, temp: 0.0 }
-  investigators:                       # 2 DIFFERENT families (MVP), run in parallel.
-    # Small fast tool-callers: dense 70B/80B ran to the 120s budget; these ~8–9B swaps
-    # keep cross-family diversity (Meta + NVIDIA) and cut the loop to well under 30s.
-    - { model: meta/llama-3.1-8b-instruct,        tools: [web_search, factcheck_search, numeric_check] }
-    - { model: nvidia/nvidia-nemotron-nano-9b-v2, tools: [web_search, factcheck_search, source_credibility] }
+  decomposer:   { model: meta/llama-3.1-8b-instruct, temp: 0.0 }  # S3 QA: breaks claim into sub-questions
+  investigators:                       # 2 DIFFERENT families, answer sub-questions in parallel.
+    # fetch_page added for QA-mode: investigators now read real page content, not just search snippets.
+    - { model: meta/llama-3.1-8b-instruct,        tools: [web_search, factcheck_search, fetch_page] }
+    - { model: nvidia/nvidia-nemotron-nano-9b-v2, tools: [web_search, factcheck_search, fetch_page] }
   fastpath_jury:                       # 3 independent verdict voters, different families.
     # Fast small voters (jurors don't browse, just read evidence): the dense 70B/49B ran
     # ~2min; these keep 3-family diversity (Meta / DeepSeek / NVIDIA) at a fraction of the latency.
@@ -30,3 +30,5 @@ thresholds:
   precedent_similarity: 0.85           # min claim↔fact-check similarity to trust a human debunk
   max_rebuttal_rounds: 2
   max_tool_calls_per_investigator: 3
+  max_questions: 3                     # S3 QA: max sub-questions to decompose per claim
+  prior_confidence_floor: 0.6         # S4 1b gate: unanimous low prior + unanswerable evidence → UNVERIFIABLE

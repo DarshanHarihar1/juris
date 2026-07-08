@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel
-from typing import Literal
+from typing import Literal, Optional
 
 ClaimType = Literal["factual", "numeric", "media_context", "quote", "opinion_skip"]
 
@@ -48,11 +48,14 @@ VerdictClass = Literal["TRUE", "FALSE", "MISLEADING", "UNVERIFIABLE", "CONFLICTI
 
 
 class JurorVote(BaseModel):
-    """One fast-path juror reading claim + evidence log (no browsing)."""
+    """One fast-path juror reading claim + QA evidence log (no browsing)."""
     verdict: VerdictClass
     confidence: float                   # 0–1
     key_evidence_ids: list[str] = []    # evidence tags (e1, e2, …) the vote leans on
     reasoning_short: str = ""
+    prior_verdict: Optional[VerdictClass] = None   # juror's belief before reading evidence
+    prior_confidence: float = 0.0                  # 0–1; 0 = juror didn't report a prior
+    evidence_addresses_claim: bool = True          # False → evidence too thin to judge (1b gate)
 
 
 class Argument(BaseModel):
@@ -90,6 +93,29 @@ class SynthOutput(BaseModel):
     explanation_native: str             # 3–5 sentences, each factual sentence cited [e:id]
     manipulation_tags: list[str] = []
     rebuttal_card_native: str
+
+
+# --- S3 QA-decomposition models (Phase 3b) ---
+
+class ClaimQuestions(BaseModel):
+    """Decomposer output: sub-questions whose answers together verify/refute the claim."""
+    questions: list[str]
+    time_sensitive: bool = False        # True → investigators use recency filters
+
+
+class QASource(BaseModel):
+    """A source URL the investigator fetched to answer a question."""
+    url: str
+    title: str = ""
+    snippet: str = ""
+
+
+class QuestionAnswer(BaseModel):
+    """One investigator's grounded answer to one sub-question."""
+    question: str
+    answer: str = ""
+    answerable: bool = True             # False → no fetched page directly answered this
+    sources: list[QASource] = []
 
 
 class VerdictCard(BaseModel):

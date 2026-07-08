@@ -46,6 +46,46 @@ async def web_search(query: str, recency: str | None = None, site: str | None = 
     ]
 
 
+def _extract_text(html: str) -> str:
+    """Naive stdlib tag-strip — no new deps. Skips script/style/nav/header/footer."""
+    from html.parser import HTMLParser
+
+    class _Ex(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self._skip = 0
+            self.parts: list[str] = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag in ("script", "style", "nav", "header", "footer", "aside"):
+                self._skip += 1
+
+        def handle_endtag(self, tag):
+            if tag in ("script", "style", "nav", "header", "footer", "aside"):
+                self._skip = max(0, self._skip - 1)
+
+        def handle_data(self, data):
+            if not self._skip:
+                self.parts.append(data)
+
+    ex = _Ex()
+    ex.feed(html)
+    return " ".join(" ".join(ex.parts).split())
+
+
+async def fetch_page(url: str) -> dict:
+    """Fetch a URL and return its plain text (≤4000 chars). Degrades to {} on any error."""
+    if not url:
+        return {}
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as c:
+            r = await c.get(url, headers={"User-Agent": "JurisFactChecker/1.0"})
+            r.raise_for_status()
+            return {"url": url, "text": _extract_text(r.text)[:4000]}
+    except Exception:
+        return {}
+
+
 async def factcheck_search(query: str) -> list[dict]:
     """Human fact-check precedent lookup: Google Fact Check Tools Claim Search API
     (GOOGLE_FACTCHECK_API_KEY) + IFCN site: searches via SearXNG. Both best-effort."""

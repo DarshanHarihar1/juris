@@ -16,6 +16,10 @@ async def _source_credibility(domain: str) -> dict:
     return {"domain": domain, "credibility": credibility.score(domain)}
 
 
+async def _fetch_page(url: str) -> dict:
+    return await search.fetch_page(url)
+
+
 REGISTRY: dict[str, dict] = {
     "web_search": {
         "fn": _web_search,
@@ -47,6 +51,16 @@ REGISTRY: dict[str, dict] = {
             "parameters": {"type": "object", "properties": {
                 "domain": {"type": "string"},
             }, "required": ["domain"]},
+        }},
+    },
+    "fetch_page": {
+        "fn": _fetch_page,
+        "schema": {"type": "function", "function": {
+            "name": "fetch_page",
+            "description": "Fetch and read the text content of a URL. Use after web_search to verify what a page actually says about the question.",
+            "parameters": {"type": "object", "properties": {
+                "url": {"type": "string", "description": "Full URL to fetch"},
+            }, "required": ["url"]},
         }},
     },
 }
