@@ -9,35 +9,45 @@ Confidence-weighted plurality share ≥ agreement_theta → consensus (→S6),
 otherwise orchestrator escalates to S5 trial."""
 import asyncio
 from collections import defaultdict
+from datetime import date
 
 from ..config import role, thresholds
 from ..models import JurorVote
 from ..services import events, nim
 
-JUROR_SYSTEM = """You are a fact-checking JUROR. Work in two steps.
+
+def _juror_system() -> str:
+    return """You are a fact-checking JUROR. Work in two steps.
+Today's date: {today}.
 
 STEP 1 — PRIOR (before reading evidence):
-State what you already know about this claim.
+State what you already know about this claim from your own knowledge.
   prior_verdict: your best guess from your own knowledge
   prior_confidence: how confident you are (0–1; 0 = you don't know)
 
 STEP 2 — EVIDENCE (read the QA evidence log):
 Each entry is a sub-question with a grounded answer from fetched web pages.
-  evidence_addresses_claim: does the evidence DIRECTLY answer the claim? (true/false)
+  evidence_addresses_claim: does the evidence DIRECTLY answer the claim with CURRENT information? (true/false)
 
 ARBITRATION RULE:
-- If evidence directly addresses the claim → evidence governs; set verdict from evidence.
-- If evidence is thin/unanswerable AND prior_confidence > 0.8 → prior governs; set verdict = prior_verdict.
+- If evidence directly answers the claim with information that appears current → evidence governs.
+- If evidence is stale (written before 2025 and facts may have changed since), thin, or unanswerable
+  AND your prior is confident (prior_confidence > 0.8) → prior governs; set verdict = prior_verdict.
 - If both evidence and prior are weak → verdict = UNVERIFIABLE.
+
+STALE EVIDENCE: If evidence answers say something you know has since changed (e.g., an old article
+says X held an office but you know the situation changed after the article was written) treat the
+evidence as stale and let your prior govern.
 
 verdict ∈ TRUE | FALSE | MISLEADING | UNVERIFIABLE | CONFLICTING
 - UNVERIFIABLE: evidence too thin AND prior not confident
-- CONFLICTING: credible evidence sources genuinely disagree
-confidence: your final confidence in the verdict (0–1)
+- CONFLICTING: credible sources genuinely disagree on current facts
 
 Return ONLY JSON:
-{"prior_verdict": "...", "prior_confidence": 0.0, "evidence_addresses_claim": true,
- "verdict": "...", "confidence": 0.0, "key_evidence_ids": ["e1"], "reasoning_short": "..."}"""
+{{"prior_verdict": "...", "prior_confidence": 0.0, "evidence_addresses_claim": true,
+ "verdict": "...", "confidence": 0.0, "key_evidence_ids": ["e1"], "reasoning_short": "..."}}""".format(
+        today=date.today().isoformat()
+    )
 
 
 def render_evidence(evidence: list[dict]) -> tuple[str, dict[str, str]]:
@@ -108,7 +118,7 @@ def agreement(votes: list[JurorVote]) -> tuple[str, float, int]:
 
 async def _vote(model: str, claim: str, evidence_text: str) -> JurorVote | None:
     messages = [
-        {"role": "system", "content": JUROR_SYSTEM},
+        {"role": "system", "content": _juror_system()},
         {"role": "user", "content": f'Claim: "{claim}"\n\nEvidence log:\n{evidence_text}'},
     ]
     try:

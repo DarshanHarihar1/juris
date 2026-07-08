@@ -16,6 +16,7 @@ snippet strings they never read.
 import asyncio
 import json
 import logging
+from datetime import date
 from urllib.parse import urlparse
 
 from ..config import role, thresholds
@@ -34,13 +35,17 @@ Set time_sensitive=true if answers depend on who/what is current right now.
 Output ONLY JSON: {"questions": ["..."], "time_sensitive": false}"""
 
 QA_SYSTEM = """You are a fact-checking INVESTIGATOR. Answer the question below using web evidence.
+Today's date: {today}.
 
 Rules:
 - Use web_search or factcheck_search to find relevant pages.
+- For time-sensitive questions you MUST include recency="week" in your first web_search call.
 - Use fetch_page on the 1–2 most relevant URLs to read what those pages actually say.
 - Base your answer ONLY on what the fetched pages contain — not your own knowledge.
 - Include in "sources" every URL you actually fetched or found via search.
-- If no fetched page directly answers the question, set answerable to false and answer "".
+- IMPORTANT: If the fetched page was published before 2025 and asks about a current fact
+  (who holds office now, current prices, etc.) the page is STALE — set answerable to false.
+- If no fetched page directly answers the question with current information, set answerable to false.
 - You may call tools AT MOST {cap} times total, then output your JSON.
 
 Output ONLY JSON:
@@ -93,7 +98,7 @@ async def _answer_question(
     schemas = tools.schemas(avail)
     recency_hint = '\n(Use recency="month" in web_search — this is time-sensitive.)' if time_sensitive else ""
     messages: list[dict] = [
-        {"role": "system", "content": QA_SYSTEM.format(cap=cap)},
+        {"role": "system", "content": QA_SYSTEM.format(cap=cap, today=date.today().isoformat())},
         {"role": "user", "content": (
             f'Claim (English): "{claim_en}"\n'
             f'Claim (native): "{claim_native}"\n'
