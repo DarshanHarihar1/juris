@@ -90,7 +90,10 @@ class TwilioWhatsApp:
         async with httpx.AsyncClient(timeout=15) as cx:
             r = await cx.post(_TWILIO_MSGS.format(sid=sid), auth=(sid, token),
                               data={"From": frm, "To": reply_to, "Body": body})
-            r.raise_for_status()
+            # raise_for_status() drops the response body — Twilio's actual error code/reason
+            # (e.g. 63016 outside session window, 63018 rate limit) lives only in r.text.
+            if r.is_error:
+                raise RuntimeError(f"Twilio send failed {r.status_code}: {r.text}")
 
 
 class MetaWhatsApp:
