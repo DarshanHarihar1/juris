@@ -29,8 +29,10 @@ INVESTIGATOR_BUDGET = 120.0  # wall-clock cap for ALL question-answering; split 
 
 DECOMPOSE_SYSTEM = """You are a claim analyst. Break the claim into AT MOST 3 specific,
 self-contained factual sub-questions whose answers together would verify or refute it.
+Each question MUST include all essential context from the original claim (year, full event name, named entity).
+NEVER create trivially answerable questions (e.g. "Does X exist?" or a bare year like "2026").
 Each question must be answerable from a single web search.
-Set time_sensitive=true if answers depend on who/what is current right now.
+Set time_sensitive=true if answers depend on current events, or if the claim references events in 2025 or later.
 
 Output ONLY JSON: {"questions": ["..."], "time_sensitive": false}"""
 
@@ -73,6 +75,11 @@ def _domain(url: str) -> str:
     return (urlparse(url).netloc or "").lower().removeprefix("www.")
 
 
+import re as _re
+
+_RECENT_YEAR = _re.compile(r"\b20(2[5-9])\b")
+
+
 async def _decompose(claim_en: str, claim_native: str) -> ClaimQuestions:
     messages = [
         {"role": "system", "content": DECOMPOSE_SYSTEM},
@@ -82,15 +89,21 @@ async def _decompose(claim_en: str, claim_native: str) -> ClaimQuestions:
         resp = await nim.call("decomposer", messages, response_schema=ClaimQuestions)
         obj = resp.parsed
         if obj and obj.questions:
+            # ponytail: force time_sensitive for any claim mentioning 2025–2029
+            if _RECENT_YEAR.search(claim_en) or _RECENT_YEAR.search(claim_native or ""):
+                obj.time_sensitive = True
             return obj
     except Exception as e:
         log.warning("decompose failed: %s", e)
-    return ClaimQuestions(questions=[claim_en], time_sensitive=False)
+    ts = bool(_RECENT_YEAR.search(claim_en))
+    return ClaimQuestions(questions=[claim_en], time_sensitive=ts)
 
 
 async def _seed_search(question: str) -> str:
-    """Run a recency=week search and return top-3 results as a formatted string."""
+    """Run a recency=week search, fall back to month if empty, return top-3 results."""
     results = await search.web_search(question, recency="week")
+    if not results:
+        results = await search.web_search(question, recency="month")
     if not results:
         return ""
     lines = []
@@ -100,7 +113,7 @@ async def _seed_search(question: str) -> str:
             f"  Title: {r.get('title', '')}\n"
             f"  Snippet: {r.get('snippet', '')}"
         )
-    return "Seed search results (recency=week — use fetch_page on the most relevant URL):\n" + "\n".join(lines)
+    return "Seed search results (recency=week→month — use fetch_page on the most relevant URL):\n" + "\n".join(lines)
 
 
 async def _answer_question(
@@ -163,6 +176,10 @@ async def _answer_question(
     )
 
 
+# ponytail: LLMs hallucinate example.com/placeholder.com when search returns empty
+_HALLUCINATED_DOMAINS = frozenset({"example.com", "example.org", "example.net", "placeholder.com"})
+
+
 def _to_evidence_rows(qa: QuestionAnswer, found_by: str) -> list[dict]:
     """Expand one QuestionAnswer into one evidence row per source URL."""
     rows = []
@@ -171,6 +188,8 @@ def _to_evidence_rows(qa: QuestionAnswer, found_by: str) -> list[dict]:
         if not url:
             continue
         dom = _domain(url)
+        if dom in _HALLUCINATED_DOMAINS:
+            continue  # filter LLM-hallucinated placeholder sources
         rows.append({
             "url": url, "domain": dom,
             "title": src.title or "", "snippet": src.snippet or "",
