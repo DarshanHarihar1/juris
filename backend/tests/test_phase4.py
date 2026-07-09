@@ -36,6 +36,24 @@ def test_agreement_money_path():
     assert split_share < 0.75                                     # 3-way split → escalate
 
 
+def test_render_evidence_marks_stale_sources():
+    from app.pipeline.s4_fastpath import render_evidence
+
+    text, _idmap = render_evidence([
+        {
+            "id": "1",
+            "question": "Who is the CM of Karnataka?",
+            "answer": "Siddaramaiah",
+            "answerable": True,
+            "domain": "boomlive.in",
+            "credibility": 0.85,
+            "published_at": "2024-05-01",
+        }
+    ], as_of_date="2026-07-09")
+    assert "2024-05-01" in text
+    assert "stale" in text.lower()
+
+
 # --- citation-lock --------------------------------------------------------------
 def test_citation_lock():
     from app.services import citations
@@ -83,6 +101,34 @@ async def test_deliberate_consensus_and_escalate(monkeypatch):
              "m3": JurorVote(verdict="MISLEADING", confidence=0.6)}
     monkeypatch.setattr(s4.nim, "call", lambda rn, msgs, **k: _wrap(split[k["model_id"]]))
     assert await s4.deliberate("job", "claim", "c", ev) is None    # escalate
+
+
+async def test_deliberate_caps_confidence_for_stale_time_sensitive_evidence(monkeypatch):
+    from app.models import JurorVote
+    from app.pipeline import s4_fastpath as s4
+
+    monkeypatch.setattr(s4, "role", lambda n: ["m1", "m2", "m3"])
+    monkeypatch.setattr(s4.events, "emit", _emit)
+
+    votes = {
+        "m1": JurorVote(verdict="FALSE", confidence=0.9, evidence_addresses_claim=True),
+        "m2": JurorVote(verdict="FALSE", confidence=0.8, evidence_addresses_claim=True),
+        "m3": JurorVote(verdict="FALSE", confidence=0.7, evidence_addresses_claim=True),
+    }
+    monkeypatch.setattr(s4.nim, "call", lambda rn, msgs, **k: _wrap(votes[k["model_id"]]))
+
+    ev = [{
+        "id": "1",
+        "question": "Who is the CM of Karnataka?",
+        "answer": "Siddaramaiah",
+        "answerable": True,
+        "domain": "boomlive.in",
+        "credibility": 0.85,
+        "published_at": "2024-05-01",
+    }]
+    res = await s4.deliberate("job", "claim", "c", ev, is_time_sensitive=True, as_of_date="2026-07-09")
+    assert res is not None
+    assert res["confidence"] < 80
 
 
 def _wrap(parsed):

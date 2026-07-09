@@ -102,6 +102,68 @@ async def test_opinion_filter():
     assert out.claims == []
 
 
+async def test_normalize_includes_temporal_grounding_metadata(monkeypatch):
+    from app.models import NormalizedClaim, NormalizerOutput
+    from app.pipeline import s1_normalize
+
+    seen = {}
+
+    async def fake_call(role_name, messages, response_schema=None, model_id=None, tools=None):
+        seen["system"] = messages[0]["content"]
+        seen["user"] = messages[1]["content"]
+        return type("Resp", (), {
+            "parsed": NormalizerOutput(
+                detected_lang="en",
+                claims=[
+                    NormalizedClaim(
+                        text_norm="As of July 2026, D.K. Shivakumar is the current Chief Minister of Karnataka.",
+                        text_norm_native="As of July 2026, D.K. Shivakumar is the current Chief Minister of Karnataka.",
+                        claim_type="factual",
+                        is_time_sensitive=True,
+                    )
+                ],
+            )
+        })()
+
+    monkeypatch.setattr(s1_normalize.nim, "call", fake_call)
+
+    out = await s1_normalize.normalize("DK Shivakumar is the CM of Karnataka")
+    assert "Today's date:" in seen["system"]
+    assert out.claims[0].is_time_sensitive is True
+    assert "As of July 2026" in out.claims[0].text_norm
+
+
+async def test_normalize_filters_low_checkworthiness_claims(monkeypatch):
+    from app.models import NormalizedClaim, NormalizerOutput
+    from app.pipeline import s1_normalize
+
+    async def fake_call(role_name, messages, response_schema=None, model_id=None, tools=None):
+        return type("Resp", (), {
+            "parsed": NormalizerOutput(
+                detected_lang="en",
+                claims=[
+                    NormalizedClaim(
+                        text_norm="The Prime Minister of India is Narendra Modi.",
+                        text_norm_native="The Prime Minister of India is Narendra Modi.",
+                        claim_type="factual",
+                        checkworthiness_score=0.95,
+                    ),
+                    NormalizedClaim(
+                        text_norm="This speech was shocking.",
+                        text_norm_native="This speech was shocking.",
+                        claim_type="factual",
+                        checkworthiness_score=0.2,
+                    ),
+                ],
+            )
+        })()
+
+    monkeypatch.setattr(s1_normalize.nim, "call", fake_call)
+
+    out = await s1_normalize.normalize("Some message")
+    assert [c.text_norm for c in out.claims] == ["The Prime Minister of India is Narendra Modi."]
+
+
 # --- end-to-end through the worker ----------------------------------------------
 @needs_db
 @needs_nim

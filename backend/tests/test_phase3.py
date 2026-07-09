@@ -56,6 +56,7 @@ async def test_tool_cap_enforced(monkeypatch):
     assert qa is not None
     assert qa.answerable is True
     assert len(qa.sources) == 1
+    assert qa.sources[0].published_at is None
 
 
 async def test_dedup():
@@ -86,7 +87,8 @@ async def test_parallel_execution(monkeypatch):
     async def fake_decompose(*a):
         return ClaimQuestions(questions=["Q1?", "Q2?"], time_sensitive=False)
 
-    async def slow_answer(question, claim_en, claim_native, model, tool_names, time_sensitive):
+    async def slow_answer(question, claim_en, claim_native, model, tool_names, time_sensitive,
+                          claim_seed="", search_queries=None):
         await asyncio.sleep(0.3)
         return QuestionAnswer(
             question=question, answer="ans", answerable=True,
@@ -125,7 +127,8 @@ async def test_graceful_degradation(monkeypatch):
     async def fake_decompose(*a):
         return ClaimQuestions(questions=["Q1?"], time_sensitive=False)
 
-    async def one_fails(question, claim_en, claim_native, model, tool_names, time_sensitive):
+    async def one_fails(question, claim_en, claim_native, model, tool_names, time_sensitive,
+                        claim_seed="", search_queries=None):
         if model == "B":
             raise RuntimeError("investigator B provider error")
         return QuestionAnswer(
@@ -145,6 +148,191 @@ async def test_graceful_degradation(monkeypatch):
     ev = await s3.investigate(FakeCon(), "job", "claim", "c", "c")
     assert len(ev) == 1
     assert ev[0]["found_by"] == "A"   # B failed, A's evidence still persisted
+
+
+async def test_investigate_uses_time_sensitive_flag_from_s1(monkeypatch):
+    """S3 should honor S1's time-sensitive metadata instead of re-deriving it."""
+    from app.models import ClaimQuestions, QuestionAnswer
+    from app.pipeline import s3_investigate as s3
+
+    seen = []
+
+    async def fake_decompose(*a, **k):
+        return ClaimQuestions(questions=["Who is the current CM of Karnataka?"], time_sensitive=False)
+
+    async def fake_answer(question, claim_en, claim_native, model, tool_names, time_sensitive,
+                          claim_seed="", search_queries=None):
+        seen.append(time_sensitive)
+        return QuestionAnswer(question=question, answer="", answerable=False, sources=[])
+
+    monkeypatch.setattr(s3, "_decompose", fake_decompose)
+    monkeypatch.setattr(s3, "_answer_question", fake_answer)
+    monkeypatch.setattr(s3, "role", lambda n: [{"model": "A", "tools": []}, {"model": "B", "tools": []}])
+    monkeypatch.setattr(s3.events, "emit", lambda *a, **k: _noop())
+
+    class FakeCon:
+        async def fetchval(self, *a):
+            return "row"
+
+    await s3.investigate(FakeCon(), "job", "claim", "DK Shivakumar is the CM of Karnataka",
+                         "DK Shivakumar is the CM of Karnataka", is_time_sensitive=True)
+    assert seen == [True, True]
+
+
+async def test_answer_question_preserves_source_published_at(monkeypatch):
+    from app.pipeline import s3_investigate as s3
+    from app.services import tools
+
+    async def fake_call_tool(name, **kw):
+        return [{
+            "url": "https://altnews.in/x",
+            "title": "t",
+            "snippet": "s",
+            "published_at": "2026-07-08",
+            "domain": "altnews.in",
+        }]
+
+    async def fake_chat(model, messages, tools=None):
+        if tools:
+            return _msg(tool_calls=[("web_search", {"query": "q"})])
+        return _msg(content=json.dumps({
+            "question": "test?",
+            "answer": "yes",
+            "answerable": True,
+            "sources": [{"url": "https://altnews.in/x", "title": "t", "snippet": "s"}],
+        }))
+
+    monkeypatch.setattr(tools, "call_tool", fake_call_tool)
+    monkeypatch.setattr(s3.nim, "chat", fake_chat)
+
+    qa = await s3._answer_question("test?", "claim", "claim", "m", ["web_search"], True)
+    assert qa is not None
+    assert qa.sources[0].published_at == "2026-07-08"
+
+
+async def test_to_evidence_rows_carries_published_at():
+    from app.models import QASource, QuestionAnswer
+    from app.pipeline import s3_investigate as s3
+
+    qa = QuestionAnswer(
+        question="Who is CM?",
+        answer="DK Shivakumar",
+        answerable=True,
+        sources=[QASource(
+            url="https://altnews.in/x",
+            title="t",
+            snippet="s",
+            published_at="2026-07-08",
+        )],
+    )
+
+    rows = s3._to_evidence_rows(qa, "model-a")
+    assert rows[0]["published_at"] == "2026-07-08"
+
+
+async def test_generate_queries_caps_at_three(monkeypatch):
+    from app.pipeline import s3_investigate as s3
+
+    async def fake_call(role_name, messages, response_schema=None, model_id=None, tools=None):
+        return type("Resp", (), {"parsed": type("Parsed", (), {
+            "queries": ["q1 current", "q2 july 2026", "q3 Karnataka CM", "q4 extra"],
+        })()})()
+
+    monkeypatch.setattr(s3.nim, "call", fake_call)
+
+    queries = await s3._generate_queries(
+        "As of July 2026, D.K. Shivakumar is the current Chief Minister of Karnataka.",
+        "Who is the current CM of Karnataka?",
+        True,
+        "2026-07-09",
+    )
+    assert queries == ["q1 current", "q2 july 2026", "q3 Karnataka CM"]
+
+
+async def test_investigate_passes_generated_queries_to_investigators(monkeypatch):
+    from app.models import ClaimQuestions, QuestionAnswer
+    from app.pipeline import s3_investigate as s3
+
+    seen = []
+
+    async def fake_decompose(*a, **k):
+        return ClaimQuestions(questions=["Who is the current CM of Karnataka?"], time_sensitive=True)
+
+    async def fake_generate_queries(claim_en, question, time_sensitive, as_of_date):
+        return ["karnataka cm july 2026", "dk shivakumar current cm"]
+
+    async def fake_answer(question, claim_en, claim_native, model, tool_names, time_sensitive,
+                          claim_seed="", search_queries=None):
+        seen.append(search_queries)
+        return QuestionAnswer(question=question, answer="", answerable=False, sources=[])
+
+    monkeypatch.setattr(s3, "_decompose", fake_decompose)
+    monkeypatch.setattr(s3, "_generate_queries", fake_generate_queries)
+    monkeypatch.setattr(s3, "_answer_question", fake_answer)
+    monkeypatch.setattr(s3, "role", lambda n: [{"model": "A", "tools": []}, {"model": "B", "tools": []}])
+    monkeypatch.setattr(s3.events, "emit", lambda *a, **k: _noop())
+
+    class FakeCon:
+        async def fetchval(self, *a):
+            return "row"
+
+    await s3.investigate(
+        FakeCon(), "job", "claim",
+        "As of July 2026, D.K. Shivakumar is the current Chief Minister of Karnataka.",
+        "As of July 2026, D.K. Shivakumar is the current Chief Minister of Karnataka.",
+        is_time_sensitive=True,
+    )
+    assert seen == [
+        ["karnataka cm july 2026", "dk shivakumar current cm"],
+        ["karnataka cm july 2026", "dk shivakumar current cm"],
+    ]
+
+
+async def test_filter_relevant_evidence_drops_irrelevant_rows(monkeypatch):
+    from app.pipeline import s3_investigate as s3
+
+    rows = [
+        {
+            "url": "https://boomlive.in/cm",
+            "question": "Who is the current CM of Karnataka?",
+            "answer": "D.K. Shivakumar",
+            "answerable": True,
+            "title": "CM story",
+            "snippet": "D.K. Shivakumar is the current CM of Karnataka.",
+            "domain": "boomlive.in",
+            "credibility": 0.85,
+            "stance": None,
+        },
+        {
+            "url": "https://boomlive.in/drunk-video",
+            "question": "Who is the current CM of Karnataka?",
+            "answer": "No",
+            "answerable": True,
+            "title": "Old video",
+            "snippet": "Old video of DK Shivakumar walking unsteadily.",
+            "domain": "boomlive.in",
+            "credibility": 0.85,
+            "stance": None,
+        },
+    ]
+
+    labels = iter(["supports", "irrelevant"])
+
+    async def fake_call(role_name, messages, response_schema=None, model_id=None, tools=None):
+        label = next(labels)
+        return type("Resp", (), {
+            "parsed": type("Parsed", (), {"label": label})()
+        })()
+
+    monkeypatch.setattr(s3.nim, "call", fake_call)
+
+    filtered = await s3._filter_relevant_evidence(
+        "As of July 2026, D.K. Shivakumar is the current Chief Minister of Karnataka.",
+        rows,
+    )
+    assert len(filtered) == 1
+    assert filtered[0]["url"] == "https://boomlive.in/cm"
+    assert filtered[0]["stance"] == "supports"
 
 
 async def _noop():

@@ -76,54 +76,13 @@ async def test_fetch_page_uses_jina_reader(monkeypatch):
     assert seen["headers"]["X-Return-Format"] == "markdown"
 
 
-# --- embeddings + cache ---------------------------------------------------------
+# --- embeddings ----------------------------------------------------------------
 @needs_nim
 async def test_embed_dims():
     from app.services import nim
 
     v = await nim.embed(["The Great Wall of China is visible from space."])
     assert len(v) == 1 and len(v[0]) == 1024
-
-
-@needs_db
-@needs_nim
-async def test_cache_hit_and_miss():
-    from app import db
-    from app.pipeline import s2_precedent
-    from app.services import nim
-
-    same = "Drinking cow urine cures COVID-19."
-    other = "The Eiffel Tower is located in Paris, France."
-    [e_same1, e_same2, e_other] = await nim.embed([same, same, other])
-
-    con = await (await db.pool()).acquire()
-    try:
-        sub = await con.fetchval(
-            "insert into submissions (channel, user_hash, media_type, raw_text) "
-            "values ('web','test','text',$1) returning id", same)
-        # a completed, cached verdict on the first claim
-        c1 = await con.fetchval(
-            "insert into claims (submission_id, text_original, text_norm, text_norm_native, claim_type, embedding) "
-            "values ($1,$2,$2,$2,'factual',$3::vector) returning id", sub, same, s2_precedent.vec(e_same1))
-        await con.execute(
-            "insert into verdicts (claim_id, slug, verdict, confidence, card, path) "
-            "values ($1,$2,'FALSE',90,'{}'::jsonb,'trial')", c1, f"test-{c1}")
-
-        # identical claim → cache hit
-        c2 = await con.fetchval(
-            "insert into claims (submission_id, text_original, text_norm, text_norm_native, claim_type, embedding) "
-            "values ($1,$2,$2,$2,'factual',$3::vector) returning id", sub, same, s2_precedent.vec(e_same2))
-        hit = await s2_precedent._cache(con, c2, e_same2)
-        assert hit and hit["path"] == "cache" and hit["slug"] == f"test-{c1}"
-
-        # different claim → NO false cache hit
-        c3 = await con.fetchval(
-            "insert into claims (submission_id, text_original, text_norm, text_norm_native, claim_type, embedding) "
-            "values ($1,$2,$2,$2,'factual',$3::vector) returning id", sub, other, s2_precedent.vec(e_other))
-        assert await s2_precedent._cache(con, c3, e_other) is None
-    finally:
-        await con.execute("delete from submissions where id = $1", sub)  # cascades claims+verdicts
-        await (await db.pool()).release(con)
 
 
 # --- precedent semantic gate (offline) ------------------------------------------
@@ -153,3 +112,17 @@ async def test_precedent_semantic_gate(monkeypatch):
     monkeypatch.setattr(s2.nim, "embed", emb_near)
     res = await s2._precedent("Modi is PM", [1.0, 0.0, 0.0], "c2")
     assert res is not None and res["path"] == "precedent" and res["similarity"] > 0.99
+
+
+async def test_check_skips_cache_and_uses_precedent_only(monkeypatch):
+    """Phase A removes verdict cache reuse; S2 should go straight to precedent lookup."""
+    from app.pipeline import s2_precedent as s2
+
+    async def fake_precedent(text_norm, embedding, claim_id):
+        return {"path": "precedent", "fact_check": {"url": "https://altnews.in/x"}, "similarity": 0.9}
+
+    assert not hasattr(s2, "_cache")
+    monkeypatch.setattr(s2, "_precedent", fake_precedent)
+
+    res = await s2.check(None, "claim-1", [1.0, 0.0, 0.0], "Some claim")
+    assert res is not None and res["path"] == "precedent"

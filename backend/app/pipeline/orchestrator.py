@@ -77,15 +77,6 @@ async def run(job: dict) -> None:
             # S2 — precedent short-circuit (cache / human fact-check)
             await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "started"})
             sc = await s2_precedent.check(con, claim_id, emb, nc.text_norm)
-            if sc and sc["path"] == "cache":
-                # already-synthesized card from a prior run. ponytail: re-emit as-is;
-                # re-translating into the user's language is a nice-to-have, not v1.
-                await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "done",
-                                                    "claim_id": str(claim_id), "hit": "cache"})
-                await events.emit(job_id, "verdict", {"claim_id": str(claim_id), **sc["card"], "path": "cache"})
-                log.info("job=%s claim=%s VERDICT %s path=cache (sim=%.3f)",
-                         job_id, claim_id, sc.get("verdict"), sc.get("similarity", 0.0))
-                continue
             if sc and sc["path"] == "precedent":
                 fc = sc["fact_check"]
                 await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "done",
@@ -104,11 +95,19 @@ async def run(job: dict) -> None:
                                                 "claim_id": str(claim_id)})
 
             # S3 — parallel investigation gathers a cited evidence log for the miss.
-            evidence = await s3_investigate.investigate(con, job_id, claim_id, nc.text_norm, nc.text_norm_native)
+            evidence = await s3_investigate.investigate(
+                con, job_id, claim_id, nc.text_norm, nc.text_norm_native,
+                is_time_sensitive=nc.is_time_sensitive,
+                as_of_date=nc.as_of_date,
+            )
             log.info("job=%s claim=%s S2 miss -> S3 gathered %d evidence rows", job_id, claim_id, len(evidence))
 
             # S4 — fast-path jury; consensus resolves cheaply, otherwise escalate to trial.
-            result = await s4_fastpath.deliberate(job_id, claim_id, nc.text_norm, evidence)
+            result = await s4_fastpath.deliberate(
+                job_id, claim_id, nc.text_norm, evidence,
+                is_time_sensitive=nc.is_time_sensitive,
+                as_of_date=nc.as_of_date,
+            )
             if result is None:
                 log.info("job=%s claim=%s jury split -> S5 trial", job_id, claim_id)
                 await events.emit(job_id, "escalation", {"claim_id": str(claim_id)})

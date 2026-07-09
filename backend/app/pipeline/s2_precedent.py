@@ -29,35 +29,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 async def check(con, claim_id, embedding: list[float], text_norm: str) -> dict | None:
-    hit = await _cache(con, claim_id, embedding)
-    if hit:
-        return hit
     return await _precedent(text_norm, embedding, claim_id)
-
-
-async def _cache(con, claim_id, embedding: list[float]) -> dict | None:
-    row = await con.fetchrow(
-        """
-        select v.slug, v.verdict, v.confidence, v.card,
-               1 - (c.embedding <=> $1::vector) as similarity
-        from claims c join verdicts v on v.claim_id = c.id
-        where v.confidence >= 70 and c.embedding is not null and c.id <> $2
-        order by c.embedding <=> $1::vector
-        limit 1
-        """,
-        vec(embedding), claim_id,
-    )
-    if not row or row["similarity"] < thresholds()["cache_similarity"]:
-        if row:
-            log.info("S2 cache miss claim=%s best_sim=%.3f < %.2f",
-                     claim_id, float(row["similarity"]), thresholds()["cache_similarity"])
-        return None
-    log.info("S2 cache HIT claim=%s slug=%s sim=%.3f", claim_id, row["slug"], float(row["similarity"]))
-    return {
-        "path": "cache", "slug": row["slug"], "verdict": row["verdict"],
-        "confidence": row["confidence"], "similarity": float(row["similarity"]),
-        "card": json.loads(row["card"]),
-    }
 
 
 async def _precedent(text_norm: str, claim_emb: list[float], claim_id) -> dict | None:

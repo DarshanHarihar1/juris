@@ -36,6 +36,9 @@ class NormalizedClaim(BaseModel):
     text_norm: str
     text_norm_native: str
     claim_type: ClaimType
+    is_time_sensitive: bool = False
+    as_of_date: str | None = None
+    checkworthiness_score: float = 1.0
 
 
 class NormalizerOutput(BaseModel):
@@ -103,11 +106,22 @@ class ClaimQuestions(BaseModel):
     time_sensitive: bool = False        # True → investigators use recency filters
 
 
+class QueryBundle(BaseModel):
+    """Generated search queries for a claim-question pair."""
+    queries: list[str]
+
+
+class EvidenceRelevance(BaseModel):
+    """Relevance/stance label for a candidate evidence row."""
+    label: Literal["supports", "refutes", "irrelevant"]
+
+
 class QASource(BaseModel):
     """A source URL the investigator fetched to answer a question."""
     url: str
     title: str = ""
     snippet: str = ""
+    published_at: str | None = None
 
 
 class QuestionAnswer(BaseModel):

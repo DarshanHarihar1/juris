@@ -20,7 +20,7 @@ from datetime import date
 from urllib.parse import urlparse
 
 from ..config import role, thresholds
-from ..models import ClaimQuestions, QASource, QuestionAnswer
+from ..models import ClaimQuestions, EvidenceRelevance, QASource, QueryBundle, QuestionAnswer
 from ..services import credibility, events, nim, search, tools
 
 log = logging.getLogger("juris.s3")
@@ -35,6 +35,27 @@ Each question must be answerable from a single web search.
 Set time_sensitive=true if answers depend on current events, or if the claim references events in 2025 or later.
 
 Output ONLY JSON: {"questions": ["..."], "time_sensitive": false}"""
+
+QUERY_SYSTEM = """You generate web search queries for claim verification.
+Today's date: {today}.
+
+Rules:
+- Generate AT MOST 3 short, keyword-style search queries.
+- Do NOT repeat the raw claim verbatim unless unavoidable.
+- For time-sensitive claims, include current-time anchors like the year/month or words like "current".
+- Prefer entity + office/event + date style queries over conversational questions.
+
+Output ONLY JSON: {{"queries": ["..."]}}"""
+
+RELEVANCE_SYSTEM = """You label whether one evidence item is useful for verifying a claim.
+
+Rules:
+- supports: the evidence directly supports the claim.
+- refutes: the evidence directly refutes the claim.
+- irrelevant: the evidence is off-topic, only shares keywords, or does not directly answer the claim.
+- Be strict. Old unrelated fact-check pages that merely mention the same person/event are irrelevant.
+
+Output ONLY JSON: {{"label": "supports"|"refutes"|"irrelevant"}}"""
 
 QA_SYSTEM = """You are a fact-checking INVESTIGATOR. Answer the question below using web evidence.
 Today's date: {today}.
@@ -104,13 +125,58 @@ async def _decompose(claim_en: str, claim_native: str) -> ClaimQuestions:
     return ClaimQuestions(questions=[claim_en], time_sensitive=ts)
 
 
-async def _seed_search(question: str) -> str:
-    """Run a recency=week search, fall back to month if empty, return top-3 results."""
+async def _generate_queries(
+    claim_en: str,
+    question: str,
+    time_sensitive: bool,
+    as_of_date: str | None,
+) -> list[str]:
+    messages = [
+        {"role": "system", "content": QUERY_SYSTEM.format(today=date.today().isoformat())},
+        {"role": "user", "content": (
+            f'Claim: "{claim_en}"\n'
+            f'Question: "{question}"\n'
+            f"time_sensitive: {str(time_sensitive).lower()}\n"
+            f'as_of_date: "{as_of_date or ""}"'
+        )},
+    ]
+    try:
+        resp = await nim.call("query_generator", messages, response_schema=QueryBundle)
+        parsed = resp.parsed
+        if parsed and parsed.queries:
+            out: list[str] = []
+            for q in parsed.queries:
+                q = (q or "").strip()
+                if q and q not in out:
+                    out.append(q)
+                if len(out) == 3:
+                    break
+            if out:
+                return out
+    except Exception as e:
+        log.warning("query generation failed: %s", e)
+    return [question]
+
+
+def _published_date_map(results: list[dict]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for item in results or []:
+        if not isinstance(item, dict):
+            continue
+        url = (item.get("url") or "").strip()
+        published_at = item.get("published_at")
+        if url and published_at:
+            out[url.rstrip("/")] = str(published_at)
+    return out
+
+
+async def _seed_search(question: str) -> tuple[str, dict[str, str]]:
+    """Run a recency=week search, fall back to month if empty, return top-3 results + dates."""
     results = await search.web_search(question, recency="week")
     if not results:
         results = await search.web_search(question, recency="month")
     if not results:
-        return ""
+        return "", {}
     lines = []
     for r in results[:3]:
         lines.append(
@@ -118,27 +184,61 @@ async def _seed_search(question: str) -> str:
             f"  Title: {r.get('title', '')}\n"
             f"  Snippet: {r.get('snippet', '')}"
         )
-    return "Seed search results (recency=week→month — use fetch_page on the most relevant URL):\n" + "\n".join(lines)
+    return (
+        "Seed search results (recency=week→month — use fetch_page on the most relevant URL):\n" + "\n".join(lines),
+        _published_date_map(results),
+    )
+
+
+async def _seed_search_queries(queries: list[str], time_sensitive: bool) -> tuple[str, dict[str, str]]:
+    combined_lines: list[str] = []
+    combined_dates: dict[str, str] = {}
+    for query in queries[:3]:
+        results = await search.web_search(query, recency="week" if time_sensitive else None)
+        if not results and time_sensitive:
+            results = await search.web_search(query, recency="month")
+        if not results:
+            continue
+        combined_dates.update(_published_date_map(results))
+        for r in results[:2]:
+            combined_lines.append(
+                f"- Query: {query}\n"
+                f"  URL: {r['url']}\n"
+                f"  Title: {r.get('title', '')}\n"
+                f"  Snippet: {r.get('snippet', '')}"
+            )
+    if not combined_lines:
+        return "", {}
+    return (
+        "Seed search results (generated queries — use fetch_page on the most relevant URL):\n"
+        + "\n".join(combined_lines),
+        combined_dates,
+    )
 
 
 async def _answer_question(
     question: str, claim_en: str, claim_native: str,
     model: str, tool_names: list[str], time_sensitive: bool,
     claim_seed: str = "",
+    search_queries: list[str] | None = None,
 ) -> QuestionAnswer | None:
     """One investigator's ReAct loop to answer a single sub-question."""
     cap = thresholds().get("max_tool_calls_per_investigator", 3)
     avail = [t for t in tool_names if t in tools.REGISTRY]
     schemas = tools.schemas(avail)
-    seed = (await _seed_search(question)) if time_sensitive else ""
-    combined_seed = "\n\n".join(s for s in (seed, claim_seed) if s)
+    query_list = search_queries or [question]
+    seed_text, seed_dates = await _seed_search_queries(query_list, time_sensitive)
+    combined_seed = "\n\n".join(s for s in (seed_text, claim_seed) if s)
     seed_block = f"\n\n{combined_seed}" if combined_seed else ""
+    query_block = "\n".join(f"- {q}" for q in query_list[:3])
+    source_dates = dict(seed_dates)
     messages: list[dict] = [
         {"role": "system", "content": QA_SYSTEM.format(cap=cap, today=date.today().isoformat())},
         {"role": "user", "content": (
             f'Claim (English): "{claim_en}"\n'
             f'Claim (native): "{claim_native}"\n'
-            f'Question to answer: "{question}"{seed_block}'
+            f'Question to answer: "{question}"\n'
+            f"Suggested search queries:\n{query_block}{seed_block}"
         )},
     ]
     executed = 0
@@ -159,6 +259,8 @@ async def _answer_question(
                 result = await tools.call_tool(tc.function.name, **args)
             except Exception as e:
                 result = {"error": str(e)}
+            if isinstance(result, list):
+                source_dates.update(_published_date_map(result))
             messages.append({"role": "tool", "tool_call_id": tc.id,
                              "content": json.dumps(result)[:4000]})
     else:
@@ -171,7 +273,12 @@ async def _answer_question(
         return None
 
     sources = [
-        QASource(url=s.get("url", ""), title=s.get("title", ""), snippet=s.get("snippet", ""))
+        QASource(
+            url=s.get("url", ""),
+            title=s.get("title", ""),
+            snippet=s.get("snippet", ""),
+            published_at=source_dates.get((s.get("url", "") or "").rstrip("/")),
+        )
         for s in raw.get("sources", [])
         if isinstance(s, dict) and s.get("url")
     ]
@@ -204,6 +311,7 @@ def _to_evidence_rows(qa: QuestionAnswer, found_by: str) -> list[dict]:
         rows.append({
             "url": url, "domain": dom,
             "title": src.title or "", "snippet": src.snippet or "",
+            "published_at": src.published_at,
             "stance": None,  # QA mode: no document-level stance
             "credibility": credibility.score(dom),
             "found_by": found_by,
@@ -225,7 +333,44 @@ def _dedup(items: list[dict]) -> list[dict]:
     return list(best.values())
 
 
-async def investigate(con, job_id, claim_id, claim_en: str, claim_native: str) -> list[dict]:
+async def _filter_relevant_evidence(claim_en: str, evidence: list[dict]) -> list[dict]:
+    filtered: list[dict] = []
+    for ev in evidence:
+        if not ev.get("url"):
+            filtered.append(ev)
+            continue
+        messages = [
+            {"role": "system", "content": RELEVANCE_SYSTEM},
+            {"role": "user", "content": (
+                f'Claim: "{claim_en}"\n'
+                f'Question: "{ev.get("question", "")}"\n'
+                f'Answer: "{ev.get("answer", "")}"\n'
+                f'Title: "{ev.get("title", "")}"\n'
+                f'Snippet: "{ev.get("snippet", "")}"'
+            )},
+        ]
+        try:
+            resp = await nim.call("query_generator", messages, response_schema=EvidenceRelevance)
+            parsed = resp.parsed
+            if parsed is None or parsed.label == "irrelevant":
+                continue
+            ev["stance"] = parsed.label
+            filtered.append(ev)
+        except Exception:
+            filtered.append(ev)
+    return filtered
+
+
+async def investigate(
+    con,
+    job_id,
+    claim_id,
+    claim_en: str,
+    claim_native: str,
+    *,
+    is_time_sensitive: bool = False,
+    as_of_date: str | None = None,
+) -> list[dict]:
     """Decompose claim, answer sub-questions across both investigator families in
     parallel, persist grounded evidence rows, emit events."""
     await events.emit(job_id, "stage", {"stage": "S3_INVESTIGATE", "status": "started",
@@ -233,17 +378,23 @@ async def investigate(con, job_id, claim_id, claim_en: str, claim_native: str) -
 
     # Step 1: decompose
     decomposed = await _decompose(claim_en, claim_native)
+    if is_time_sensitive:
+        decomposed.time_sensitive = True
     max_q = thresholds().get("max_questions", 3)
     questions = decomposed.questions[:max_q]
     log.info("job=%s claim=%s questions=%s time_sensitive=%s",
              job_id, claim_id, questions, decomposed.time_sensitive)
+    query_plan = {
+        q: await _generate_queries(claim_en, q, decomposed.time_sensitive, as_of_date)
+        for q in questions
+    }
 
     investigators = role("investigators")
     per_q_budget = INVESTIGATOR_BUDGET / max(len(questions), 1)
 
     # When time_sensitive, also seed-search the original claim so investigators
     # have direct evidence about it even when sub-questions are off-target.
-    claim_seed = (await _seed_search(claim_en)) if decomposed.time_sensitive else ""
+    claim_seed, _claim_seed_dates = (await _seed_search(claim_en)) if decomposed.time_sensitive else ("", {})
 
     # Step 2: answer all (question × investigator) tasks fully in parallel
     tasks = [(q, inv) for q in questions for inv in investigators]
@@ -254,6 +405,7 @@ async def investigate(con, job_id, claim_id, claim_en: str, claim_native: str) -
                 inv["model"], inv.get("tools", []),
                 decomposed.time_sensitive,
                 claim_seed=claim_seed,
+                search_queries=query_plan.get(q),
             ),
             timeout=per_q_budget,
         )
@@ -284,7 +436,7 @@ async def investigate(con, job_id, claim_id, claim_en: str, claim_native: str) -
                 "question": q, "answer": "", "answerable": False,
             })
 
-    evidence = _dedup(merged)
+    evidence = await _filter_relevant_evidence(claim_en, _dedup(merged))
 
     # Step 4: persist rows that have a URL; placeholder (no-URL) rows stay in-memory only
     for ev in evidence:
@@ -292,13 +444,14 @@ async def investigate(con, job_id, claim_id, claim_en: str, claim_native: str) -
             continue
         row_id = await con.fetchval(
             """insert into evidence
-               (claim_id, url, domain, title, snippet, stance, credibility, found_by,
+               (claim_id, url, domain, title, snippet, published_at, stance, credibility, found_by,
                 question, answer, answerable)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                returning id""",
             claim_id,
             ev["url"], ev["domain"],
             ev.get("title") or None, ev.get("snippet") or None,
+            ev.get("published_at"),
             ev.get("stance"),
             ev.get("credibility"), ev.get("found_by"),
             ev.get("question"), ev.get("answer"), ev.get("answerable"),

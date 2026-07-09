@@ -4,6 +4,7 @@ roles:
   embeddings:   { model: nvidia/nv-embedqa-e5-v5, dims: 1024 }  # 1024-dim; baai/bge-m3 500s on NIM. We embed the English text_norm pivot, so English-centric is fine.
   normalizer:   { model: meta/llama-3.1-8b-instruct, temp: 0.0 }
   decomposer:   { model: meta/llama-3.1-8b-instruct, temp: 0.0 }  # S3 QA: breaks claim into sub-questions
+  query_generator: { model: meta/llama-3.1-8b-instruct, temp: 0.0 }
   investigators:                       # 2 DIFFERENT families, answer sub-questions in parallel.
     # fetch_page added for QA-mode: investigators now read real page content, not just search snippets.
     - { model: meta/llama-3.1-8b-instruct,        tools: [web_search, factcheck_search, fetch_page] }
@@ -26,9 +27,9 @@ provider:
   rate_limit: 40                       # req/min, free-tier ceiling → global semaphore
 thresholds:
   agreement_theta: 0.75
-  cache_similarity: 0.92
   precedent_similarity: 0.85           # min claim↔fact-check similarity to trust a human debunk
   max_rebuttal_rounds: 2
   max_tool_calls_per_investigator: 3
   max_questions: 3                     # S3 QA: max sub-questions to decompose per claim
   prior_confidence_floor: 0.6         # S4 1b gate: unanimous low prior + unanswerable evidence → UNVERIFIABLE
+  checkworthy_floor: 0.6

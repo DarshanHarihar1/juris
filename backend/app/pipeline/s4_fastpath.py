@@ -9,7 +9,7 @@ Confidence-weighted plurality share ≥ agreement_theta → consensus (→S6),
 otherwise orchestrator escalates to S5 trial."""
 import asyncio
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime
 
 from ..config import role, thresholds
 from ..models import JurorVote
@@ -50,7 +50,24 @@ Return ONLY JSON:
     )
 
 
-def render_evidence(evidence: list[dict]) -> tuple[str, dict[str, str]]:
+def _parse_date(value: str | None):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)[:10]).date()
+    except ValueError:
+        return None
+
+
+def _is_stale(published_at: str | None, as_of_date: str | None) -> bool:
+    published = _parse_date(published_at)
+    anchor = _parse_date(as_of_date)
+    if published is None or anchor is None:
+        return False
+    return published < anchor.replace(year=max(anchor.year - 1, 1))
+
+
+def render_evidence(evidence: list[dict], as_of_date: str | None = None) -> tuple[str, dict[str, str]]:
     """Render evidence log for jurors/trial.
 
     QA rows (have 'question'): grouped by question into answered-question blocks.
@@ -74,14 +91,17 @@ def render_evidence(evidence: list[dict]) -> tuple[str, dict[str, str]]:
             first = evs[0]
             answerable = first.get("answerable", True)
             answer = first.get("answer") or ""
+            published_at = first.get("published_at")
+            stale = _is_stale(published_at, as_of_date)
             sources = ", ".join(
-                f"{ev.get('domain')} (cred={ev.get('credibility')})"
+                f"{ev.get('domain')} (cred={ev.get('credibility')}, date={ev.get('published_at') or 'unknown'})"
                 for ev in evs[:3] if ev.get("domain")
             ) or "(no sources)"
             ans_line = answer if (answerable and answer) else "(no direct answer found)"
+            freshness = " [stale]" if stale else ""
             lines.append(
                 f"[e:{tag}] Q: {q}\n"
-                f"        A: {ans_line}\n"
+                f"        A: {ans_line}{freshness}\n"
                 f"        Sources: {sources}"
             )
         return "\n\n".join(lines), idmap
@@ -128,11 +148,19 @@ async def _vote(model: str, claim: str, evidence_text: str) -> JurorVote | None:
         return None  # dead juror doesn't sink the vote; remaining quorum decides
 
 
-async def deliberate(job_id, claim_id, claim: str, evidence: list[dict]) -> dict | None:
+async def deliberate(
+    job_id,
+    claim_id,
+    claim: str,
+    evidence: list[dict],
+    *,
+    is_time_sensitive: bool = False,
+    as_of_date: str | None = None,
+) -> dict | None:
     """Run 3 jurors in parallel. Return consensus result dict, or None to escalate to S5."""
     await events.emit(job_id, "stage", {"stage": "S4_FASTPATH", "status": "started",
                                         "claim_id": str(claim_id)})
-    evidence_text, _idmap = render_evidence(evidence)
+    evidence_text, _idmap = render_evidence(evidence, as_of_date=as_of_date)
     jurors = role("fastpath_jury")
     votes = [v for v in await asyncio.gather(*[_vote(m, claim, evidence_text) for m in jurors])
              if v is not None]
@@ -157,6 +185,14 @@ async def deliberate(job_id, claim_id, claim: str, evidence: list[dict]) -> dict
         }
 
     verdict, share, conf = agreement(votes)
+    if is_time_sensitive and as_of_date:
+        fresh_evidence = any(
+            not _is_stale(ev.get("published_at"), as_of_date)
+            for ev in evidence
+            if ev.get("published_at")
+        )
+        if not fresh_evidence:
+            conf = min(conf, 60)
     theta = thresholds()["agreement_theta"]
     await events.emit(job_id, "stage", {"stage": "S4_FASTPATH", "status": "done",
                                         "claim_id": str(claim_id),
