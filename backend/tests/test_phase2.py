@@ -1,38 +1,19 @@
 """Search/service tests retained for v2.
 
-These cover deterministic credibility scoring plus the standalone search/fetch
-helpers that still underpin the Verify loop.
+Covers the search/fetch helpers that underpin the Verify loop.
 """
 import pytest
 
 pytestmark = pytest.mark.asyncio
 
 
-# --- credibility (offline) ------------------------------------------------------
-async def test_credibility_bands():
-    from app.services import credibility
-
-    assert credibility.score("pib.gov.in") >= 0.9          # Tier 1 gov
-    assert 0.7 <= credibility.score("boomlive.in") <= 0.85  # Tier 2 IFCN
-    assert 0.4 <= credibility.score("timesofindia.indiatimes.com") <= 0.6  # Tier 3
-    assert credibility.score("opindia.com") <= 0.3          # Tier 4
-    assert credibility.score("some-random-blog.example") == 0.35  # unknown
-    assert credibility.score("factcheck.pib.gov.in") >= 0.9  # sub-domain → parent match
-
-
-# --- tools (offline: providers down → graceful empty) ---------------------------
-async def test_tools_standalone(monkeypatch):
-    from app.services import search, tools
+async def test_tools_search_only(monkeypatch):
+    from app.services import tools
 
     monkeypatch.delenv("SEARXNG_URL", raising=False)
-    monkeypatch.delenv("GOOGLE_FACTCHECK_API_KEY", raising=False)
-    search.factcheckers.cache_clear()
-
-    assert await tools.call_tool("web_search", query="anything") == []          # SearXNG down → []
-    assert await tools.call_tool("factcheck_search", query="anything") == []    # no key + no SearXNG → []
-    cred = await tools.call_tool("source_credibility", domain="pib.gov.in")
-    assert cred["credibility"] >= 0.9
+    assert set(tools.REGISTRY) == {"search"}
     assert tools.schemas(["search"])[0]["function"]["name"] == "search"
+    assert await tools.call_tool("search", query="anything") == []
 
 
 async def test_fetch_page_uses_jina_reader(monkeypatch):
@@ -89,6 +70,7 @@ async def test_web_search_unwraps_google_redirect_urls(monkeypatch):
                         "title": "DK Shivakumar is the new Chief Minister of Karnataka",
                         "content": "DK Shivakumar is the new Chief Minister of Karnataka.",
                         "publishedDate": "2026-07-09",
+                        "score": 0.9,
                     }
                 ]
             }
@@ -114,4 +96,3 @@ async def test_web_search_unwraps_google_redirect_urls(monkeypatch):
     assert rows[0]["url"] == "https://www.hindustantimes.com/india-news/dk-shivakumar-is-the-new-chief-minister-of-karnataka-10162319418868.html"
     assert rows[0]["domain"] == "hindustantimes.com"
     assert rows[0]["published_at"] == "2026-07-09"
-

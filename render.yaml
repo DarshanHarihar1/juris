@@ -1,6 +1,6 @@
 # Render Blueprint — Juris backend: Web Service (FastAPI, runs the job queue
 # in-process) + SearXNG meta-search. Auto-deploy on push to main. Set
-# NIM_API_KEY and DATABASE_URL in the
+# GROQ_API_KEY and DATABASE_URL in the
 # Render dashboard (sync: false = secret, entered once per service).
 services:
   - type: web
@@ -18,10 +18,11 @@ services:
       # 3.12 has wheels for every pinned dep. Bump when the stack ships cp314 wheels.
       - key: PYTHON_VERSION
         value: "3.12.8"
-      - key: NIM_API_KEY
+      - key: GROQ_API_KEY
         sync: false
       - key: DATABASE_URL
         sync: false
+
       - key: GOOGLE_FACTCHECK_API_KEY
         sync: false
       # WhatsApp (Phase 7). Twilio creds + the wa_id hash salt — all secret, set once in
@@ -36,6 +37,15 @@ services:
         sync: false
       - key: SEARXNG_URL              # internal URL of the searxng service
         fromService: { name: juris-searxng, type: web, property: hostport }
+      # LangSmith tracing (optional — unset/false = no-op; jobs still run)
+      - key: LANGSMITH_TRACING
+        value: "true"
+      - key: LANGSMITH_ENDPOINT
+        value: "https://api.smith.langchain.com"
+      - key: LANGSMITH_API_KEY
+        sync: false
+      - key: LANGSMITH_PROJECT
+        value: "juris"
 
   # ponytail: no separate worker service — free plan has no worker dyno, so the
   # web service runs the queue loop in-process (see app/main.py lifespan).

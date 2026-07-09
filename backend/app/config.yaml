@@ -1,20 +1,20 @@
-# config.yaml — role→model matrix + thresholds. All models via NVIDIA NIM.
-# IDs are real NIM catalog IDs; re-pin from build.nvidia.com/models at build time.
+# config.yaml — role→model matrix + thresholds. Models via Groq (OpenAI-compatible).
+# IDs from https://console.groq.com/docs/models
 roles:
-  normalizer:   { model: meta/llama-3.1-8b-instruct, temp: 0.0 }
-  verifier:     { model: nvidia/nvidia-nemotron-nano-9b-v2, temp: 0.1 }
-  synthesizer:  { model: meta/llama-3.1-8b-instruct, temp: 0.2 }
-  ocr:          { model: meta/llama-3.2-11b-vision-instruct }
+  normalizer:   { model: openai/gpt-oss-20b, temp: 0.0, include_reasoning: false }
+  verifier:     { model: llama-3.3-70b-versatile, temp: 0.1 }
+  synthesizer:  { model: openai/gpt-oss-20b, temp: 0.2, include_reasoning: false }
+  # ponytail: Scout is preview; only vision model on this Groq account for OCR.
+  ocr:          { model: meta-llama/llama-4-scout-17b-16e-instruct }
 provider:
-  base_url: https://integrate.api.nvidia.com/v1
-  auth_env: NIM_API_KEY
-  fallback_model: meta/llama-3.1-8b-instruct
+  base_url: https://api.groq.com/openai/v1
+  auth_env: GROQ_API_KEY
+  fallback_model: openai/gpt-oss-20b
   rate_limit: 40
 thresholds:
   max_verify_steps: 6
   verify_budget_s: 75
-  max_autofetch: 2
-  max_results: 6
+  max_autofetch: 5
+  max_results: 5
   fetch_truncate_chars: 3000
   temporal_slack_days: 3
-  checkworthy_floor: 0.6

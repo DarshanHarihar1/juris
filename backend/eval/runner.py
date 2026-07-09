@@ -156,31 +156,31 @@ async def run_live_v2_path(text: str) -> dict[str, Any]:
     from app.pipeline import s1_normalize
 
     norm = await s1_normalize.normalize(text)
-    if not norm.claims:
+    if not norm.sub_claims:
         return {"verdict": "UNVERIFIABLE", "normalized_claim": "", "synthesized": None}
 
-    claim = norm.claims[0]
+    claim_text = norm.sub_claims[0]
     verify_module = _import_v2_verify_module()
-    verify_fn = _find_callable(verify_module, ("verify", "verify_claim", "run"))
+    verify_fn = _find_callable(verify_module, ("verify", "verify_claim", "run", "verify_with_evidence"))
     verdict_payload = await _call_with_supported_kwargs(
         verify_fn,
-        claim=claim,
-        normalized_claim=claim,
-        claim_text=claim.text_norm,
-        text_norm=claim.text_norm,
-        claim_native=claim.text_norm_native,
-        text_norm_native=claim.text_norm_native,
-        lang=norm.detected_lang,
-        detected_lang=norm.detected_lang,
-        is_time_sensitive=claim.is_time_sensitive,
-        as_of_date=claim.as_of_date,
-        volatility=claim.volatility,
+        claim=claim_text,
+        normalized_claim=claim_text,
+        claim_text=claim_text,
+        text_norm=claim_text,
+        claim_native=claim_text,
+        text_norm_native=claim_text,
+        lang=norm.language,
+        detected_lang=norm.language,
         job_id="eval",
         claim_id="eval",
     )
     verdict_dict = _as_dict(verdict_payload)
-    verdict_dict.setdefault("normalized_claim", claim.text_norm)
-    verdict_dict["synthesized"] = await _try_synthesize(norm.detected_lang, claim, verdict_dict, text)
+    # SubClaimVerdict uses lowercase; normalize for eval scoring.
+    if isinstance(verdict_dict.get("verdict"), str):
+        verdict_dict["verdict"] = verdict_dict["verdict"].upper()
+    verdict_dict.setdefault("normalized_claim", claim_text)
+    verdict_dict["synthesized"] = await _try_synthesize(norm.language, claim_text, verdict_dict, text)
     return verdict_dict
 
 
@@ -233,6 +233,8 @@ async def _call_with_supported_kwargs(fn: Callable[..., Any], **available: Any) 
 
 
 async def _try_synthesize(lang: str, claim: Any, verdict: dict[str, Any], original: str) -> Any:
+    claim_text = claim if isinstance(claim, str) else getattr(claim, "text_norm", str(claim))
+    claim_native = claim_text if isinstance(claim, str) else getattr(claim, "text_norm_native", claim_text)
     for module_name in ("app.pipeline.synthesize_v2", "app.pipeline.v2_synthesize", "app.pipeline.s6_synthesize"):
         try:
             module = import_module(module_name)
@@ -243,8 +245,8 @@ async def _try_synthesize(lang: str, claim: Any, verdict: dict[str, Any], origin
             if callable(fn) and _can_call_without_db(fn):
                 return await _call_with_supported_kwargs(
                     fn,
-                    claim_en=claim.text_norm,
-                    claim_native=claim.text_norm_native,
+                    claim_en=claim_text,
+                    claim_native=claim_native,
                     lang=lang,
                     verdict=verdict.get("verdict"),
                     confidence=verdict.get("confidence", 0),

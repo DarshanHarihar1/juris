@@ -1,29 +1,18 @@
-"""Search layer. SearXNG wrapper, Jina fetcher, fact-check lookup, and v2 merged
-search+fetch evidence rows. Provider failures degrade to [] / {} so retrieval
-never crashes the pipeline."""
+"""Search layer. SearXNG wrapper, Jina fetcher, and merged search+fetch evidence
+rows. Provider failures degrade to [] / {} so retrieval never crashes the pipeline."""
 import asyncio
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import os
 import re
-from functools import lru_cache
-from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
-import yaml
 
 from ..config import thresholds
-from . import credibility
 
-_FACTCHECKERS = Path(__file__).parent.parent / "data" / "factcheckers.yaml"
 _TIMEOUT = 10.0
 _DATE_RE = re.compile(r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b")
-
-
-@lru_cache(maxsize=1)
-def factcheckers() -> list[str]:
-    return yaml.safe_load(_FACTCHECKERS.read_text()) or []
 
 
 def _domain(url: str) -> str:
@@ -69,19 +58,35 @@ async def web_search(
         return []                               # SearXNG down → empty, never crash
     return [
         {"url": canonical_url(x.get("url", "")), "title": x.get("title"), "snippet": x.get("content"),
-         "domain": _domain(canonical_url(x.get("url", ""))), "published_at": x.get("publishedDate")}
+         "domain": _domain(canonical_url(x.get("url", ""))), "published_at": x.get("publishedDate"),
+         "score": x.get("score") or 0.0}
         for x in results if x.get("url")
     ]
 
 
+# Heuristic markers for string claims (normalize no longer emits is_time_sensitive).
+_TIME_SENSITIVE_RE = re.compile(
+    r"\b(current|currently|now|today|latest|incumbent|reigning|"
+    r"chief\s+minister|\bcm\b|prime\s+minister|\bpm\b|president|governor|"
+    r"mayor|ceo|as\s+of)\b",
+    re.I,
+)
+
+
 def _claim_attr(claim, name: str, default=None):
+    if isinstance(claim, str):
+        return default
     if isinstance(claim, dict):
         return claim.get(name, default)
     return getattr(claim, name, default)
 
 
 def _is_time_sensitive(claim) -> bool:
-    return bool(_claim_attr(claim, "is_time_sensitive", _claim_attr(claim, "time_sensitive", False)))
+    flagged = _claim_attr(claim, "is_time_sensitive", _claim_attr(claim, "time_sensitive", None))
+    if flagged is not None:
+        return bool(flagged)
+    text = claim if isinstance(claim, str) else str(_claim_attr(claim, "text_norm", claim) or "")
+    return bool(_TIME_SENSITIVE_RE.search(text))
 
 
 def _parse_date(value) -> date | None:
@@ -126,12 +131,12 @@ def temporal_filter(hits: list[dict], claim) -> list[dict]:
 
 def _rank_key(claim):
     def key(hit: dict):
-        cred = hit.get("credibility") or 0.0
+        score = hit.get("score") or 0.0
         published = _parse_date(hit.get("published_at"))
         recency = published.toordinal() if published else 0
         if _is_time_sensitive(claim):
-            return (-cred, -recency)
-        return (-cred, 0)
+            return (-score, -recency)
+        return (-score, 0)
     return key
 
 
@@ -141,7 +146,6 @@ def _evidence_row(hit: dict, evidence_id: str, content: str | None = None, fetch
         "url": hit.get("url", ""),
         "domain": hit.get("domain", ""),
         "title": hit.get("title") or "",
-        "credibility": hit.get("credibility") or 0.0,
         "published_at": hit.get("published_at"),
         "fetch_failed": fetch_failed,
     }
@@ -159,8 +163,8 @@ async def search(
     claim,
     evidence_seq_start: int = 1,
 ) -> list[dict]:
-    """v2 merged search+auto-fetch tool. Returns stable evidence rows e1, e2, ...
-    after credibility filtering, temporal filtering, ranking, and top-N Jina fetch."""
+    """Merged search+auto-fetch. Returns evidence rows e1, e2, ... after temporal
+    filtering, score ranking, and top-N Jina fetch."""
     ts = thresholds()
     hits = await web_search(
         query,
@@ -178,15 +182,13 @@ async def search(
             continue
         seen.add(url.rstrip("/"))
         domain = hit.get("domain") or _domain(url)
-        cred = credibility.score(domain)
-        if cred < 0.3:
-            continue
-        filtered.append({**hit, "url": url, "domain": domain, "credibility": cred})
+        filtered.append({**hit, "url": url, "domain": domain})
 
     filtered = temporal_filter(filtered, claim)
     filtered.sort(key=_rank_key(claim))
-    max_results = ts.get("max_results", 6)
-    max_autofetch = min(ts.get("max_autofetch", 2), max_results)
+    # Design: SearXNG top-5 → Jina full text for those URLs.
+    max_results = min(ts.get("max_results", 5), 5)
+    max_autofetch = min(ts.get("max_autofetch", 5), max_results)
     selected = filtered[:max_results]
     top = selected[:max_autofetch]
 
@@ -222,35 +224,3 @@ async def fetch_page(url: str) -> dict:
             return {"url": url, "text": r.text[:4000]}
     except Exception:
         return {}
-
-
-async def factcheck_search(query: str) -> list[dict]:
-    """Human fact-check precedent lookup: Google Fact Check Tools Claim Search API
-    (GOOGLE_FACTCHECK_API_KEY) + IFCN site: searches via SearXNG. Both best-effort."""
-    out: list[dict] = []
-    key = os.environ.get("GOOGLE_FACTCHECK_API_KEY")
-    if key:
-        try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-                r = await c.get(
-                    "https://factchecktools.googleapis.com/v1alpha1/claims:search",
-                    params={"query": query, "key": key, "languageCode": "en"},
-                )
-                r.raise_for_status()
-                for claim in r.json().get("claims", []):
-                    for rev in claim.get("claimReview", []):
-                        url = rev.get("url", "")
-                        url = canonical_url(url)
-                        out.append({
-                            "url": url, "domain": _domain(url),
-                            "title": rev.get("title") or claim.get("text"),
-                            "publisher": (rev.get("publisher") or {}).get("name"),
-                            "rating": rev.get("textualRating"),
-                            "published_at": rev.get("reviewDate"),
-                            "claim": claim.get("text"),
-                        })
-        except Exception:
-            pass
-    for site in factcheckers():                 # IFCN site-restricted fallback
-        out += await web_search(query, site=site)
-    return out

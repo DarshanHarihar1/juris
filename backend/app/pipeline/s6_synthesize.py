@@ -1,44 +1,70 @@
-"""S6 Synthesis. Turns a decided verification result into the user-facing VerdictCard:
-a citation-locked explanation in the user's language, manipulation tags from a fixed
-taxonomy, and a <=400-char forwardable rebuttal. Persists the verdict row and emits the
-final `verdict` event."""
+"""Stage 3 — Verdict: AND-combine + format (1 claim) or summarize (N≥2).
+
+Single sub-claim: no LLM — format verify agent's {verdict, explanation, evidence}.
+Multi: rule-based AND label + one gpt-oss-20b summary call (Groq).
+"""
 import json
 import re
+from dataclasses import dataclass
+from urllib.parse import urlparse
+
+from langsmith import traceable
+from pydantic import BaseModel, field_validator
 
 from ..config import role
-from ..models import MANIPULATION_TAGS, EvidenceRef, SynthOutput, VerdictCard
-from ..services import citations, events, nim
+from ..models import EvidenceRef, SubClaimVerdict, SynthOutput, VerdictCard, to_db_verdict
+from ..services import events, nim
 
 REBUTTAL_MAX = 400
 
-SYSTEM = """You are the SYNTHESIZER for a fact-checking service. The verdict is already
-DECIDED — do not change it. Write the user-facing card in the user's language ({lang}).
+SUMMARY_SYSTEM = """You write a short WhatsApp-forwardable fact-check summary.
 
-Rules:
-- one_liner_native: ONE short sentence stating the verdict, in {lang}.
-- explanation_native: 3–5 sentences in {lang}. EVERY factual sentence MUST cite evidence
-  with an [e:id] tag (e.g. [e:e2]). Assert nothing not supported by the evidence snippets.
-- manipulation_tags: identify manipulation techniques ACTUALLY present in the ORIGINAL
-  message below. Choose 0–3 ONLY from this taxonomy, and use [] if none clearly apply —
-  do not guess or list unrelated tags: {tags}.
-- rebuttal_card_native: a polite forwardable counter-message in {lang}, ≤400 characters,
-  including at least one source URL. Correct the claim; never insult the sender.
+The combined verdict label is already DECIDED by rules — do not change or soften it.
+Combined verdict: {verdict}
 
-Return ONLY JSON:
-{{"one_liner_native":"...","explanation_native":"...","manipulation_tags":[],"rebuttal_card_native":"..."}}"""
+Write in the user's language ({lang}):
+- explanation: 2–5 sentences that cover ALL sub-claim findings (do not drop a false
+  or unverifiable part). Stay consistent with the combined verdict.
+- Keep it plain text (no JSON, no markdown fences).
+
+Return ONLY JSON: {{"explanation":"..."}}"""
 
 
-def rating_to_class(rating: str | None) -> str:
-    """Map a human fact-check's textual rating to the local verdict classes."""
-    r = (rating or "").lower()
-    # check misleading/mixed first — "partly false", "half true" are MISLEADING, not FALSE/TRUE
-    if any(w in r for w in ("misleading", "partly", "half", "mixture", "exagger", "out of context")):
-        return "MISLEADING"
-    if any(w in r for w in ("false", "incorrect", "pants on fire", "fake", "hoax", "no evidence")):
-        return "FALSE"
-    if any(w in r for w in ("true", "correct", "accurate")):
-        return "TRUE"
-    return "UNVERIFIABLE"
+class SummaryOutput(BaseModel):
+    explanation: str
+
+    @field_validator("explanation")
+    @classmethod
+    def _nonempty(cls, v: str) -> str:
+        text = (v or "").strip()
+        if not text:
+            raise ValueError("explanation must be non-empty")
+        return text
+
+
+@dataclass
+class VerifiedPart:
+    claim_id: object
+    sub_claim: str
+    scv: SubClaimVerdict
+
+
+def and_combine(verdicts: list[str]) -> str:
+    """Rule-based AND (false-dominates). Pure — no LLM."""
+    labels = [(v or "").strip().lower() for v in verdicts]
+    if not labels:
+        return "unverifiable"
+    if any(v == "false" for v in labels):
+        return "false"
+    if all(v == "true" for v in labels):
+        return "true"
+    return "unverifiable"
+
+
+def confidence_for(verdict: str) -> int:
+    return {"true": 80, "false": 80, "unverifiable": 40}.get(
+        (verdict or "").strip().lower(), 40
+    )
 
 
 def _slug(text: str, claim_id) -> str:
@@ -46,7 +72,7 @@ def _slug(text: str, claim_id) -> str:
     return f"{base}-{str(claim_id)[:8]}"
 
 
-def _models_used(_path: str) -> dict[str, str]:
+def _models_used() -> dict[str, str]:
     return {
         "normalizer": role("normalizer")["model"],
         "verifier": role("verifier")["model"],
@@ -54,52 +80,25 @@ def _models_used(_path: str) -> dict[str, str]:
     }
 
 
-def _evidence_tag(ev: dict, index: int, used: set[str]) -> str:
-    raw = str(ev.get("id") or ev.get("evidence_id") or "").strip()
-    tag = raw if re.fullmatch(r"e\d+", raw) else f"e{index}"
-    if tag not in used:
-        return tag
-
-    suffix = index
-    while f"e{suffix}" in used:
-        suffix += 1
-    return f"e{suffix}"
+def _domain(url: str) -> str:
+    try:
+        return (urlparse(url).netloc or "").lower().removeprefix("www.")
+    except Exception:
+        return ""
 
 
-def render_evidence(evidence: list[dict]) -> tuple[str, dict[str, str]]:
-    """Render v2 evidence rows for the synthesizer prompt."""
-    if not evidence:
-        return "(no evidence found)", {}
-
-    lines: list[str] = []
-    idmap: dict[str, str] = {}
-    used: set[str] = set()
-    for i, ev in enumerate(evidence, 1):
-        tag = _evidence_tag(ev, i, used)
-        used.add(tag)
-        idmap[tag] = str(ev.get("id") or ev.get("evidence_id") or "")
-
-        text = (ev.get("content") or ev.get("snippet") or ev.get("summary") or "").strip()
-        if len(text) > 1200:
-            text = text[:1197].rstrip() + "..."
-
-        meta = [
-            ev.get("domain") or ev.get("source") or "",
-            f"credibility={ev.get('credibility')}" if ev.get("credibility") is not None else "",
-            f"date={ev.get('published_at')}" if ev.get("published_at") else "",
-        ]
-        meta_text = ", ".join(part for part in meta if part) or "source unknown"
-        title = ev.get("title") or ""
-        url = ev.get("url") or ""
-        stance = f" stance={ev.get('stance')}." if ev.get("stance") else ""
-        lines.append(f"[e:{tag}] {meta_text}.{stance} {title} {url}\n{text}".strip())
-
-    return "\n\n".join(lines), idmap
+def _evidence_rows(parts: list[VerifiedPart]) -> list[dict]:
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for p in parts:
+        for u in p.scv.evidence:
+            if u and u not in seen:
+                seen.add(u)
+                rows.append({"url": u, "domain": _domain(u), "snippet": ""})
+    return rows
 
 
 def _enforce_rebuttal(text: str, fallback_url: str | None) -> str:
-    """≤400 chars and at least one URL (append the top source if the model omitted one).
-    Strips [e:id] citation tags — the rebuttal is a forwardable message, not a cited card."""
     t = re.sub(r"\s*\[e:[^\]]+\]", "", text or "").strip()
     if "http" not in t and fallback_url:
         room = max(0, REBUTTAL_MAX - len(fallback_url) - 1)
@@ -107,51 +106,155 @@ def _enforce_rebuttal(text: str, fallback_url: str | None) -> str:
     return t[:REBUTTAL_MAX]
 
 
+def _concat_fallback(parts: list[VerifiedPart], combined: str) -> str:
+    bits = [f"[{p.scv.verdict}] {p.sub_claim}: {p.scv.explanation}" for p in parts]
+    return f"Combined verdict: {combined}. " + " | ".join(bits)
+
+
+def format_single(scv: SubClaimVerdict) -> SynthOutput:
+    """N=1: no LLM — thin template over verify output."""
+    urls = list(scv.evidence)
+    return SynthOutput(
+        one_liner_native=f"{to_db_verdict(scv.verdict)}.",
+        explanation_native=scv.explanation.strip(),
+        rebuttal_card_native=_enforce_rebuttal(scv.explanation, urls[0] if urls else None),
+    )
+
+
+async def summarize_multi(
+    parts: list[VerifiedPart], combined: str, lang: str,
+) -> SynthOutput:
+    """N≥2: exactly one LLM call for explanation; label already decided."""
+    lang = lang or "en"
+    lines = []
+    for i, p in enumerate(parts, 1):
+        urls = ", ".join(p.scv.evidence[:3]) or "(none)"
+        lines.append(
+            f"{i}. sub_claim={p.sub_claim!r}\n"
+            f"   verdict={p.scv.verdict}\n"
+            f"   explanation={p.scv.explanation}\n"
+            f"   evidence={urls}"
+        )
+    user = (
+        f"Combined verdict (FIXED): {combined}\n\n"
+        f"Sub-claim findings:\n" + "\n\n".join(lines)
+    )
+    try:
+        resp = await nim.call(
+            "synthesizer",
+            [
+                {"role": "system", "content": SUMMARY_SYSTEM.format(
+                    verdict=combined, lang=lang,
+                )},
+                {"role": "user", "content": user},
+            ],
+            response_schema=SummaryOutput,
+        )
+        explanation = resp.parsed.explanation if resp.parsed else _concat_fallback(parts, combined)
+    except Exception:
+        explanation = _concat_fallback(parts, combined)
+
+    urls = [u for p in parts for u in p.scv.evidence]
+    return SynthOutput(
+        one_liner_native=f"{to_db_verdict(combined)}.",
+        explanation_native=explanation,
+        rebuttal_card_native=_enforce_rebuttal(explanation, urls[0] if urls else None),
+    )
+
+
 def build_card(claim_id, claim_en, claim_native, verdict, confidence, path,
                evidence: list[dict], out: SynthOutput) -> VerdictCard:
-    """Assemble a validated VerdictCard from the model output + deterministic fields.
-    Pure (no I/O) so the citation-lock / tag-whitelist / rebuttal gates are unit-testable."""
-    explanation, _viol = citations.validate(out.explanation_native)          # citation-lock hard gate
-    tags = [t for t in out.manipulation_tags if t in MANIPULATION_TAGS][:3]  # taxonomy whitelist, cap 3
-    top = sorted(evidence, key=lambda e: e.get("credibility") or 0, reverse=True)
-    ev_refs = [EvidenceRef(url=e["url"], domain=e.get("domain", ""), stance=e.get("stance"),
-                           date=e.get("published_at")) for e in top[:5] if e.get("url")]
+    """Assemble a VerdictCard. Pure (no I/O) for unit tests."""
+    ev_refs = [
+        EvidenceRef(url=e["url"], domain=e.get("domain") or _domain(e["url"]),
+                    stance=e.get("stance"),
+                    date=str(e["published_at"]) if e.get("published_at") else None)
+        for e in evidence[:5] if e.get("url")
+    ]
     path = path or "verify"
     rebuttal = _enforce_rebuttal(out.rebuttal_card_native, ev_refs[0].url if ev_refs else None)
     return VerdictCard(
         slug=_slug(claim_en, claim_id), claim_native=claim_native, claim_en=claim_en,
         verdict=verdict, confidence=confidence, one_liner_native=out.one_liner_native,
-        explanation_native=explanation, manipulation_tags=tags, evidence=ev_refs,
-        rebuttal_card_native=rebuttal, path=path, models_used=_models_used(path),
+        explanation_native=out.explanation_native or "", evidence=ev_refs,
+        rebuttal_card_native=rebuttal, path=path, models_used=_models_used(),
+        manipulation_tags=[],
     )
 
 
-async def synthesize(con, job_id, claim_id, *, claim_en, claim_native, lang,
-                     verdict, confidence, path="verify", evidence: list[dict], original: str = "") -> VerdictCard:
-    await events.emit(job_id, "stage", {"stage": "SYNTHESIZE", "status": "started", "claim_id": str(claim_id)})
-    path = path or "verify"
-    evidence_text, _idmap = render_evidence(evidence)
-    lang = lang or "en"
-    user = (f'Original message: "{original or claim_en}"\nClaim: "{claim_en}"\n'
-            f'Decided verdict: {verdict} (confidence {confidence}/100)\n\n'
-            f'Evidence log:\n{evidence_text}')
-    try:
-        resp = await nim.call("synthesizer", [
-            {"role": "system", "content": SYSTEM.format(lang=lang, tags=", ".join(sorted(MANIPULATION_TAGS)))},
-            {"role": "user", "content": user},
-        ], response_schema=SynthOutput)
-        out: SynthOutput = resp.parsed  # type: ignore[assignment]
-    except Exception:
-        out = SynthOutput(one_liner_native=f"{verdict}.", explanation_native="", rebuttal_card_native="")
+# Kept for older tests / eval adapters that still call render_evidence.
+def render_evidence(evidence: list[dict]) -> tuple[str, dict[str, str]]:
+    if not evidence:
+        return "(no evidence found)", {}
+    lines, idmap, used = [], {}, set()
+    for i, ev in enumerate(evidence, 1):
+        tag = f"e{i}"
+        used.add(tag)
+        idmap[tag] = str(ev.get("id") or "")
+        text = (ev.get("content") or ev.get("snippet") or "").strip()
+        if len(text) > 1200:
+            text = text[:1197].rstrip() + "..."
+        lines.append(f"[e:{tag}] {ev.get('domain') or ''} {ev.get('url') or ''}\n{text}".strip())
+    return "\n\n".join(lines), idmap
 
-    card = build_card(claim_id, claim_en, claim_native, verdict, confidence, path, evidence, out)
+
+@traceable(name="verdict", run_type="chain")
+async def verdict_stage(
+    con, job_id, *,
+    claim_id,
+    original: str,
+    lang: str,
+    parts: list[VerifiedPart],
+) -> VerdictCard:
+    """Stage 3 entry: AND-combine + format or summarize, then persist one card."""
+    await events.emit(job_id, "stage", {
+        "stage": "VERDICT", "status": "started", "sub_claim_count": len(parts),
+    })
+    combined = and_combine([p.scv.verdict for p in parts])
+    db_verdict = to_db_verdict(combined)
+    confidence = confidence_for(combined)
+    evidence = _evidence_rows(parts)
+
+    if len(parts) == 1:
+        out = format_single(parts[0].scv)
+        claim_en = parts[0].sub_claim
+        claim_native = parts[0].sub_claim
+    else:
+        out = await summarize_multi(parts, combined, lang)
+        claim_en = original or " | ".join(p.sub_claim for p in parts)
+        claim_native = claim_en
+
+    card = build_card(
+        claim_id, claim_en, claim_native, db_verdict, confidence, "verify", evidence, out,
+    )
     await con.execute(
         """insert into verdicts (claim_id, slug, verdict, confidence, card, path)
            values ($1, $2, $3, $4, $5::jsonb, $6)
            on conflict (slug) do update set verdict = excluded.verdict, confidence = excluded.confidence,
                                             card = excluded.card, path = excluded.path""",
-        claim_id, card.slug, verdict, confidence, json.dumps(card.model_dump()), path,
+        claim_id, card.slug, db_verdict, confidence, json.dumps(card.model_dump()), "verify",
     )
     await events.emit(job_id, "verdict", {"claim_id": str(claim_id), **card.model_dump()})
-    await events.emit(job_id, "stage", {"stage": "SYNTHESIZE", "status": "done", "claim_id": str(claim_id)})
+    await events.emit(job_id, "stage", {
+        "stage": "VERDICT", "status": "done", "verdict": combined, "sub_claim_count": len(parts),
+    })
     return card
+
+
+# Back-compat alias used by older tests / eval.
+async def synthesize(con, job_id, claim_id, *, claim_en, claim_native, lang,
+                     verdict, confidence, path="verify", evidence: list[dict],
+                     original: str = "", explanation_seed: str = "", **_kw) -> VerdictCard:
+    """Legacy single-claim persist path (explanation_seed → no LLM)."""
+    raw = str(verdict or "unverifiable")
+    mapped = {"TRUE": "true", "FALSE": "false", "UNVERIFIABLE": "unverifiable"}.get(raw, raw.lower())
+    scv = SubClaimVerdict(
+        verdict=mapped,  # type: ignore[arg-type]
+        explanation=(explanation_seed or f"{raw}.").strip(),
+        evidence=[e["url"] for e in evidence if e.get("url")],
+    )
+    part = VerifiedPart(claim_id=claim_id, sub_claim=claim_en or claim_native, scv=scv)
+    return await verdict_stage(
+        con, job_id, claim_id=claim_id, original=original or claim_en,
+        lang=lang or "en", parts=[part],
+    )

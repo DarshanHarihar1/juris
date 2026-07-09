@@ -1,8 +1,8 @@
-"""Background worker — polls the jobs queue and runs the pipeline on claimed jobs.
-Phase 1: process() runs the orchestrator (S0→S1) then marks the job done.
-Later stages (S2→S6) extend the orchestrator, not this loop."""
+"""Background worker — polls the jobs queue and runs the pipeline on claimed jobs."""
 import asyncio
 import logging
+
+from langsmith import Client as LangSmithClient
 
 from . import db
 from .pipeline import orchestrator
@@ -12,9 +12,26 @@ log = logging.getLogger("juris.worker")
 POLL_INTERVAL = 2.0  # seconds between empty-queue polls
 
 
+def _flush_traces() -> None:
+    """Best-effort flush so short-lived workers don't drop spans. No-op if tracing off."""
+    try:
+        LangSmithClient().flush()
+    except Exception:
+        pass
+
+
 async def process(job: dict) -> None:
-    await orchestrator.run(job)
-    await jobs.mark_done(job["id"])
+    try:
+        await orchestrator.run(
+            job,
+            langsmith_extra={"metadata": {
+                "job_id": str(job["id"]),
+                "submission_id": str(job.get("submission_id")),
+            }},
+        )
+        await jobs.mark_done(job["id"])
+    finally:
+        _flush_traces()
 
 
 async def run(max_idle_polls: int | None = None) -> None:
@@ -34,6 +51,7 @@ async def run(max_idle_polls: int | None = None) -> None:
         except Exception as e:  # never let one bad job kill the worker
             log.exception("job %s failed", job["id"])
             await jobs.mark_error(job["id"], str(e))
+            _flush_traces()
 
 
 if __name__ == "__main__":
@@ -41,4 +59,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(run())
     finally:
+        _flush_traces()
         asyncio.run(db.close())

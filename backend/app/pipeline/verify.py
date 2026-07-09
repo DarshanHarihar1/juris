@@ -1,90 +1,105 @@
-"""v2 Verify stage: one iterative tool-calling verifier agent per claim.
+"""Stage 2 — Verify: one iterative FIRE-style agent per sub-claim.
 
-The code loop owns budgets, tool execution, evidence shaping, event emission,
-and citation enforcement. The model only chooses the next tool or final verdict.
+Single /search tool (SearXNG top-5 → Jina). Final answer is structured JSON
+(SubClaimVerdict) validated with Pydantic — not a tool call. Temporal guard
+rejects parametric-only time-sensitive true/false.
 """
 import json
 import time
 from datetime import date
 from urllib.parse import urlparse
 
+from langsmith import traceable
+from openai import BadRequestError
 from pydantic import ValidationError
 
 from ..config import thresholds
-from ..models import NormalizedClaim, Verdict
-from ..services import citations, credibility, events, nim, search, tools
+from ..models import SubClaimVerdict
+from ..services import events, nim, search, tools
 
-VERIFY_PROMPT = """You are a fact-checking investigator. Verify ONE claim using the tools
-provided. Today's date is {today}. Your training data has a cutoff, so for
-anything that may have changed recently, TRUST RETRIEVED EVIDENCE OVER YOUR
-OWN MEMORY.
+VERIFY_PROMPT = """You are a fact-checker and verifier. Use your own knowledge for stable, general
+facts, but your knowledge has a cutoff. **Today is {today}.** For anything
+time-sensitive — current office-holders, recent events, "latest", dated claims —
+you MUST use search. Detected claim language: {lang}; you may query in that
+language and in English.
 
-CLAIM: {text_norm}
-Original message language: {lang}
-Time-sensitive: {time_sensitive}
-Volatility: {volatility}
-Applies as of: {as_of_date}
+CLAIM: {claim}
 
-Tools:
-- search(query, time_range?): web/news search. Results are credibility-scored,
-  date-filtered, and the top results include fetched page content.
-- fetch_page(url): read full text for a result when snippets are not enough.
-- factcheck_search(query): search professional fact-checks for viral claims.
-- final_verdict(...): submit the final verdict. Call it as soon as settled.
+You have access to ONE tool:
+- **search** — Web/news search. Required arg: query (string). Optional: time_range
+  (day|week|month|year). Returns top-5 results with page text. Call it whenever
+  the claim may be time-sensitive or your parametric knowledge is insufficient.
+  You may call it multiple times with refined queries.
 
-Investigation rules:
-1. Briefly state what evidence would settle the claim, then use one tool.
-2. Never paste the raw claim verbatim as a query unless unavoidable.
-3. Time-sensitive claims: prefer recent sources and use time_range.
-4. Past-anchored claims: verify what was true as of that date.
-5. After each tool result, decide: settled -> final_verdict; otherwise make one
-   targeted new query. Do not repeat failed queries.
-6. You have at most {max_steps} tool rounds. Spend them on the crux.
+When you are ready to settle, do NOT call a tool. Reply with ONLY JSON matching:
+{{"verdict":"true"|"false"|"unverifiable","explanation":"<non-empty>","evidence":["https://..."]}}
 
-Verdict rules:
-- Every factual sentence in explanation must cite evidence as [e:e1].
-- TRUE / MOSTLY_TRUE / MISLEADING / FALSE require two independent sources, or
-  one professional fact-check directly addressing this claim.
-- MISLEADING means the core fact is real but framing, numbers, dates, or context
-  distort it.
-- Static claims with no useful search results may use your own knowledge only
-  with used_parametric_knowledge=true and confidence <= 70.
-- Time-sensitive claims with thin/conflicting evidence are UNVERIFIABLE.
+Rules:
+1. Prefer one targeted search over guessing. Do not paste the raw claim as the query.
+2. Time-sensitive claims (office-holders, "current", "now", recent events): you MUST
+   search, and evidence MUST include retrieved URLs from search results.
+3. Static/general facts may use parametric knowledge with evidence=[].
+4. If evidence is thin or conflicting, return unverifiable.
+5. You have at most {max_steps} tool rounds, then you must settle with JSON.
+6. Never invent tools (no open, browser_search, final_verdict, etc.). Only search.
 """
 
-NUDGE_USE_TOOLS = "Use exactly one available tool now. If the answer is settled, call final_verdict."
-FORCE_VERDICT = "Tool budget exhausted. Call final_verdict now using only the evidence already shown."
-TOOL_NAMES = ["search", "fetch_page", "factcheck_search", "final_verdict"]
-
-
-def _claim_attr(claim, name: str, default=None):
-    if isinstance(claim, dict):
-        return claim.get(name, default)
-    return getattr(claim, name, default)
+NUDGE_SEARCH_OR_SETTLE = (
+    "Either call the search tool with a non-empty query, or settle now with ONLY "
+    'JSON: {"verdict":"true"|"false"|"unverifiable","explanation":"...","evidence":["https://..."]}.'
+)
+NUDGE_BAD_TOOL = (
+    "Invalid tool use. The only allowed tool is search with required string argument "
+    "`query` (optional time_range). Or settle with JSON verdict — no other tools."
+)
+FORCE_VERDICT = (
+    "Tool budget exhausted. Reply with ONLY JSON using the evidence already shown. "
+    'Schema: {"verdict":"true"|"false"|"unverifiable","explanation":"<non-empty>",'
+    '"evidence":["https://..."]}. If evidence is insufficient, verdict must be unverifiable.'
+)
+TEMPORAL_NUDGE = (
+    "Rejected: this claim is time-sensitive, but evidence had no retrieved URLs. "
+    "Call search again, then settle with JSON including evidence URLs from the results."
+)
+SCHEMA_RETRY = (
+    "Your previous reply failed schema validation: {err}. "
+    "Reply with ONLY valid JSON matching "
+    '{{"verdict":"true"|"false"|"unverifiable","explanation":"<non-empty>",'
+    '"evidence":["https://..."]}}.'
+)
+TOOL_NAMES = ["search"]
+MAX_SCHEMA_RETRIES = 2
 
 
 def _claim_text(claim) -> str:
-    return _claim_attr(claim, "text_norm", str(claim))
+    if isinstance(claim, str):
+        return claim
+    if isinstance(claim, dict):
+        return str(claim.get("text_norm") or claim)
+    return str(getattr(claim, "text_norm", claim))
 
 
-def _claim_block(claim: NormalizedClaim | dict, lang: str) -> str:
-    return (
-        f'Claim: "{_claim_text(claim)}"\n'
-        f'Native claim: "{_claim_attr(claim, "text_norm_native", _claim_text(claim))}"\n'
-        f"Language: {lang}\n"
-        f"Time-sensitive: {_claim_attr(claim, 'is_time_sensitive', _claim_attr(claim, 'time_sensitive', False))}\n"
-        f"As-of date: {_claim_attr(claim, 'as_of_date', None) or 'present day'}\n"
-        f"Volatility: {_claim_attr(claim, 'volatility', 'slow')}"
-    )
+def _is_time_sensitive(claim) -> bool:
+    return search._is_time_sensitive(claim)
 
 
-def _safe_summary(text: str | None) -> str:
-    summary = "Choosing the next verification step."
-    if text:
-        summary = " ".join(text.strip().split())
-        for marker in ("Action:", "Tool:", "\n"):
-            summary = summary.split(marker, 1)[0].strip() or summary
-    return summary[:240]
+def _urls_from_log(evidence_log: list[dict]) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for row in evidence_log:
+        url = (row.get("url") or "").strip()
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def _looks_like_url(u: str) -> bool:
+    try:
+        p = urlparse(u)
+        return p.scheme in ("http", "https") and bool(p.netloc)
+    except Exception:
+        return False
 
 
 def _args(tool_call) -> dict:
@@ -101,191 +116,253 @@ def _assistant_message(msg) -> dict:
     return dict(msg)
 
 
-def _domain(url: str) -> str:
-    return (urlparse(url).netloc or "").lower().removeprefix("www.")
+def _safe_summary(text: str | None) -> str:
+    summary = "Choosing the next verification step."
+    if text:
+        summary = " ".join(text.strip().split())
+        for marker in ("Action:", "Tool:", "\n"):
+            summary = summary.split(marker, 1)[0].strip() or summary
+    return summary[:240]
 
 
-def _next_id(evidence_log: list[dict]) -> int:
-    return len(evidence_log) + 1
-
-
-def _factcheck_rows(results: list[dict], evidence_seq_start: int) -> list[dict]:
-    rows: list[dict] = []
-    for i, hit in enumerate(results, evidence_seq_start):
-        url = search.canonical_url(hit.get("url", ""))
-        domain = hit.get("domain") or _domain(url)
-        content = " ".join(
-            part for part in [
-                f"Claim: {hit.get('claim')}" if hit.get("claim") else "",
-                f"Rating: {hit.get('rating')}" if hit.get("rating") else "",
-                f"Publisher: {hit.get('publisher')}" if hit.get("publisher") else "",
-                hit.get("snippet") or "",
-            ] if part
-        )
-        rows.append({
-            "id": f"e{i}",
-            "url": url,
-            "domain": domain,
-            "title": hit.get("title") or "",
-            "credibility": credibility.score(domain),
-            "published_at": hit.get("published_at"),
-            "content": content,
-            "fetch_failed": False,
+def _agent_rows_for_prompt(rows: list[dict]) -> list[dict]:
+    """Shape tool results as top-5 {score, url, title, content} for the agent."""
+    out = []
+    for row in rows[:5]:
+        out.append({
+            "score": row.get("score") or 0.0,
+            "url": row.get("url") or "",
+            "title": row.get("title") or "",
+            "content": (row.get("content") or row.get("snippet") or "")[:2000],
         })
-    return rows
+    return out
 
 
-def _fetch_row(url: str, page: dict, evidence_id: str) -> dict:
-    domain = _domain(url)
-    text = page.get("text") or ""
-    return {
-        "id": evidence_id,
-        "url": url,
-        "domain": domain,
-        "title": "",
-        "credibility": credibility.score(domain),
-        "published_at": None,
-        "content": text[:thresholds().get("fetch_truncate_chars", 3000)] if text else "",
-        "fetch_failed": not bool(text),
-    }
+def _parse_verdict_text(text: str | None) -> SubClaimVerdict:
+    """Parse model text into SubClaimVerdict; raises ValidationError/ValueError on failure."""
+    raw = (text or "").strip()
+    if not raw:
+        raise ValueError("empty response")
+    # Strip optional markdown fences.
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        if raw.lower().startswith("json"):
+            raw = raw[4:].strip()
+    return SubClaimVerdict.model_validate_json(raw)
+
+
+def _temporal_guard_ok(claim, verdict: SubClaimVerdict) -> bool:
+    """Time-sensitive true/false must carry retrieved URLs."""
+    if not _is_time_sensitive(claim):
+        return True
+    if verdict.verdict == "unverifiable":
+        return True
+    return any(_looks_like_url(u) for u in verdict.evidence)
+
+
+def _fallback_verdict(evidence_log: list[dict], explanation: str | None = None) -> SubClaimVerdict:
+    urls = _urls_from_log(evidence_log)
+    return SubClaimVerdict(
+        verdict="unverifiable",
+        explanation=explanation or "Could not produce a valid cited verdict from available evidence.",
+        evidence=urls,
+    )
+
+
+def _fill_evidence(verdict: SubClaimVerdict, evidence_log: list[dict]) -> SubClaimVerdict:
+    if not verdict.evidence and evidence_log and verdict.verdict != "unverifiable":
+        verdict.evidence = _urls_from_log(evidence_log)
+    if verdict.verdict in ("true", "false") and not verdict.evidence:
+        urls = _urls_from_log(evidence_log)
+        if not urls:
+            return SubClaimVerdict(
+                verdict="unverifiable",
+                explanation=verdict.explanation or "Insufficient retrieved evidence.",
+                evidence=[],
+            )
+        verdict.evidence = urls
+    return verdict
+
+
+@traceable(name="search", run_type="tool")
+async def _search_tool(query: str, time_range: str | None, claim, evidence_seq_start: int) -> list[dict]:
+    return await search.search(
+        query, time_range=time_range, claim=claim, evidence_seq_start=evidence_seq_start,
+    )
 
 
 async def _emit_evidence(job_id, claim_id, rows: list[dict]) -> None:
+    if job_id is None:
+        return
     for row in rows:
-        data = {"evidence_id": row["id"], **row}
+        data = {"evidence_id": row.get("id"), **{k: v for k, v in row.items() if k != "content"}}
         if claim_id is not None:
             data["claim_id"] = str(claim_id)
-        await events.emit(job_id, "evidence", data)
+        try:
+            await events.emit(job_id, "evidence", data)
+        except Exception:
+            pass  # ponytail: live tests may run without DB
 
 
-async def _run_tool(name: str, args: dict, claim, evidence_log: list[dict]) -> tuple[object, list[dict]]:
-    start = _next_id(evidence_log)
-    if name == "search":
-        rows = await search.search(
-            args.get("query", ""),
-            time_range=args.get("time_range"),
-            claim=claim,
-            evidence_seq_start=start,
-        )
-        return rows, rows
-    if name == "factcheck_search":
-        rows = _factcheck_rows(await search.factcheck_search(args.get("query", "")), start)
-        return rows, rows
-    if name == "fetch_page":
-        url = search.canonical_url(args.get("url", ""))
-        page = await search.fetch_page(url)
-        row = _fetch_row(url, page, f"e{start}") if url else {}
-        return page, [row] if row else []
-    return {"error": f"unknown tool {name}"}, []
-
-
-def _verdict_from_call(tool_call) -> Verdict | None:
+async def _force_verdict(messages: list[dict], evidence_log: list[dict], timeout: float) -> SubClaimVerdict:
+    """Budget exhausted → one structured JSON call with schema retry via nim.call."""
     try:
-        return Verdict.model_validate(_args(tool_call))
-    except ValidationError:
-        return None
-
-
-async def _force_verdict(messages: list[dict], evidence_log: list[dict], timeout: float) -> Verdict:
-    final_tools = tools.schemas(["final_verdict"])
-    msg = await nim.chat(
-        None,
-        messages + [{"role": "user", "content": FORCE_VERDICT}],
-        tools=final_tools,
-        role_name="verifier",
-        timeout=max(1.0, timeout),
-        tool_choice="final_verdict",
-    )
-    call = (getattr(msg, "tool_calls", None) or [None])[0]
-    verdict = _verdict_from_call(call) if call else None
-    if verdict is None:
-        verdict = Verdict(
-            verdict="UNVERIFIABLE",
-            confidence=25,
-            explanation="The verifier could not produce a valid cited verdict.",
-            key_evidence=[],
-            evidence_conflict="unresolved",
-            used_parametric_knowledge=False,
+        resp = await nim.call(
+            "verifier",
+            messages + [{"role": "user", "content": FORCE_VERDICT}],
+            response_schema=SubClaimVerdict,
         )
-    return citations.enforce(verdict, evidence_log)
+        if resp.parsed is None:
+            return _fallback_verdict(evidence_log)
+        return _fill_evidence(resp.parsed, evidence_log)  # type: ignore[arg-type]
+    except Exception:
+        return _fallback_verdict(evidence_log)
 
 
-async def _verify(job_id, claim: NormalizedClaim | dict, *, claim_id=None, lang: str = "en") -> tuple[Verdict, list[dict]]:
-    """Run one verifier agent for one claim and return the enforced Verdict plus evidence."""
+@traceable(name="verify", run_type="chain")
+async def _verify(job_id, claim, *, claim_id=None, lang: str = "en") -> SubClaimVerdict:
     ts = thresholds()
     max_steps = ts.get("max_verify_steps", 6)
     budget = float(ts.get("verify_budget_s", 75))
     deadline = time.monotonic() + budget
     evidence_log: list[dict] = []
     schemas = tools.schemas(TOOL_NAMES)
+    today = date.today().isoformat()
+    claim_text = _claim_text(claim)
+    claim_for_search = claim if not isinstance(claim, str) else claim
+
     messages: list[dict] = [
         {"role": "system", "content": VERIFY_PROMPT.format(
-            today=date.today().isoformat(),
-            text_norm=_claim_text(claim),
-            lang=lang,
-            time_sensitive=_claim_attr(claim, "is_time_sensitive", _claim_attr(claim, "time_sensitive", False)),
-            volatility=_claim_attr(claim, "volatility", "slow"),
-            as_of_date=_claim_attr(claim, "as_of_date", None) or "present day",
-            max_steps=max_steps,
+            today=today, lang=lang, claim=claim_text, max_steps=max_steps,
         )},
-        {"role": "user", "content": _claim_block(claim, lang)},
+        {"role": "user", "content": f'Verify this claim: "{claim_text}"'},
     ]
 
-    if claim_id is not None:
-        await events.emit(job_id, "stage", {"stage": "VERIFY", "status": "started", "claim_id": str(claim_id)})
+    if claim_id is not None and job_id is not None:
+        try:
+            await events.emit(job_id, "stage", {"stage": "VERIFY", "status": "started", "claim_id": str(claim_id)})
+        except Exception:
+            pass
 
+    temporal_rejects = 0
+    schema_retries = 0
     for step in range(1, max_steps + 1):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
-        msg = await nim.chat(None, messages, tools=schemas, role_name="verifier", timeout=remaining)
+        try:
+            msg = await nim.chat(None, messages, tools=schemas, role_name="verifier", timeout=remaining)
+        except BadRequestError as e:
+            err = str(e).lower()
+            if "tool_use_failed" in err or "tool call validation" in err:
+                messages.append({"role": "user", "content": NUDGE_BAD_TOOL})
+                continue
+            raise
+
         tool_calls = getattr(msg, "tool_calls", None) or []
         if not tool_calls:
+            # Model settled (or stalled) with text — parse as SubClaimVerdict.
             messages.append(_assistant_message(msg))
-            messages.append({"role": "user", "content": NUDGE_USE_TOOLS})
-            continue
+            try:
+                verdict = _parse_verdict_text(getattr(msg, "content", None))
+            except (ValidationError, json.JSONDecodeError, ValueError) as e:
+                schema_retries += 1
+                if schema_retries > MAX_SCHEMA_RETRIES:
+                    break
+                messages.append({"role": "user", "content": SCHEMA_RETRY.format(err=e)})
+                continue
+            schema_retries = 0
+            if not _temporal_guard_ok(claim_for_search, verdict):
+                temporal_rejects += 1
+                messages.append({"role": "user", "content": TEMPORAL_NUDGE})
+                if temporal_rejects >= 2:
+                    break
+                continue
+            verdict = _fill_evidence(verdict, evidence_log)
+            if claim_id is not None and job_id is not None:
+                try:
+                    await events.emit(job_id, "stage", {
+                        "stage": "VERIFY", "status": "done", "claim_id": str(claim_id),
+                        "verdict": verdict.verdict,
+                    })
+                except Exception:
+                    pass
+            return verdict
 
         call = tool_calls[0]
         name = call.function.name
         args = _args(call)
-        await events.emit(job_id, "verify_step", {
-            "step": step,
-            "claim_id": str(claim_id) if claim_id is not None else None,
-            "thought_summary": _safe_summary(getattr(msg, "content", None)),
-            "query": args.get("query") or args.get("url"),
-            "settled": name == "final_verdict",
-        })
+        if job_id is not None:
+            try:
+                await events.emit(job_id, "verify_step", {
+                    "step": step,
+                    "claim_id": str(claim_id) if claim_id is not None else None,
+                    "thought_summary": _safe_summary(getattr(msg, "content", None)),
+                    "query": args.get("query"),
+                    "settled": False,
+                })
+            except Exception:
+                pass
 
-        if name == "final_verdict":
-            verdict = _verdict_from_call(call)
-            if verdict is None:
-                messages.append(_assistant_message(msg))
-                messages.append({"role": "user", "content": "Your final_verdict arguments failed schema validation. Call final_verdict once more with valid JSON."})
-                return await _force_verdict(messages, evidence_log, max(1.0, deadline - time.monotonic()))
-            final = citations.enforce(verdict, evidence_log)
-            if claim_id is not None:
-                await events.emit(job_id, "stage", {"stage": "VERIFY", "status": "done", "claim_id": str(claim_id),
-                                                    "verdict": final.verdict})
-            return final, evidence_log
+        if name != "search":
+            messages.append(_assistant_message(msg))
+            messages.append({"role": "user", "content": NUDGE_BAD_TOOL})
+            continue
+
+        query = (args.get("query") or "").strip()
+        if not query:
+            messages.append(_assistant_message(msg))
+            messages.append({"role": "user", "content": NUDGE_BAD_TOOL})
+            continue
 
         messages.append(_assistant_message(msg))
-        result, new_rows = await _run_tool(name, args, claim, evidence_log)
-        evidence_log.extend(new_rows)
-        if new_rows:
-            await _emit_evidence(job_id, claim_id, new_rows)
-        messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps(result)[:12000]})
+        rows = await _search_tool(
+            query,
+            args.get("time_range"),
+            claim_for_search,
+            len(evidence_log) + 1,
+            langsmith_extra={"metadata": {"job_id": str(job_id) if job_id else None, "query": query}},
+        )
+        evidence_log.extend(rows)
+        if rows:
+            await _emit_evidence(job_id, claim_id, rows)
+        messages.append({
+            "role": "tool",
+            "tool_call_id": call.id,
+            "content": json.dumps(_agent_rows_for_prompt(rows))[:12000],
+        })
+        # After search, nudge settle-or-search so the model doesn't stall.
+        messages.append({"role": "user", "content": NUDGE_SEARCH_OR_SETTLE})
 
     final = await _force_verdict(messages, evidence_log, max(1.0, deadline - time.monotonic()))
-    if claim_id is not None:
-        await events.emit(job_id, "stage", {"stage": "VERIFY", "status": "done", "claim_id": str(claim_id),
-                                            "verdict": final.verdict, "exhausted": True})
-    return final, evidence_log
+    if not _temporal_guard_ok(claim_for_search, final):
+        final = SubClaimVerdict(
+            verdict="unverifiable",
+            explanation=final.explanation or "Time-sensitive claim lacked retrieved evidence.",
+            evidence=_urls_from_log(evidence_log),
+        )
+    if claim_id is not None and job_id is not None:
+        try:
+            await events.emit(job_id, "stage", {
+                "stage": "VERIFY", "status": "done", "claim_id": str(claim_id),
+                "verdict": final.verdict, "exhausted": True,
+            })
+        except Exception:
+            pass
+    return final
 
 
-async def verify(job_id, claim: NormalizedClaim | dict, *, claim_id=None, lang: str = "en") -> Verdict:
-    verdict, _evidence = await _verify(job_id, claim, claim_id=claim_id, lang=lang)
-    return verdict
+async def verify(job_id, claim, *, claim_id=None, lang: str = "en") -> SubClaimVerdict:
+    return await verify_with_evidence(job_id, claim, claim_id=claim_id, lang=lang)
 
 
-async def verify_with_evidence(job_id, claim: NormalizedClaim | dict, *, claim_id=None, lang: str = "en") -> tuple[Verdict, list[dict]]:
-    return await _verify(job_id, claim, claim_id=claim_id, lang=lang)
+async def verify_with_evidence(job_id, claim, *, claim_id=None, lang: str = "en") -> SubClaimVerdict:
+    """Returns SubClaimVerdict (evidence URLs are on the model)."""
+    return await _verify(
+        job_id, claim, claim_id=claim_id, lang=lang,
+        langsmith_extra={"metadata": {
+            "job_id": str(job_id) if job_id else None,
+            "claim_id": str(claim_id) if claim_id else None,
+            "lang": lang,
+        }},
+    )

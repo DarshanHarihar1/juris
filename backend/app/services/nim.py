@@ -1,12 +1,11 @@
-"""NVIDIA NIM client — the sole gateway for every model call (LLD §2).
-OpenAI-compatible. One call() function: role→model resolution, structured-output
-validation, one retry on schema failure, fallback model on provider error, and a
-global semaphore under the ~40 req/min free-tier ceiling."""
+"""LLM client — sole gateway for every model call (Groq OpenAI-compatible API).
+Wrapped with LangSmith for optional tracing. Module name kept as `nim` for callers."""
 import asyncio
 import json
 from dataclasses import dataclass
 from typing import Any
 
+from langsmith.wrappers import wrap_openai
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
@@ -15,14 +14,17 @@ from ..config import nim_api_key, provider, role
 Message = dict[str, Any]
 Tool = dict[str, Any]
 
-# Global semaphore shared by every call — caps concurrent in-flight NIM requests
+# Global semaphore shared by every call — caps concurrent in-flight requests
 # so concurrent claim verification stays under the free-tier ceiling.
 # ponytail: concurrency cap, not a token-bucket. Add time-based limiting if 429s persist.
 _sem = asyncio.Semaphore(provider().get("rate_limit", 40))
 
-# Per-request ceiling for every NIM call. The OpenAI client default is 600s, which would
+# Per-request ceiling. The OpenAI client default is 600s, which would
 # let one slow model stall a whole job; on timeout call() falls back to the fallback model.
 NIM_TIMEOUT = 45.0
+
+# Groq-only knobs — openai SDK may not accept them as top-level kwargs.
+_EXTRA_BODY_KEYS = frozenset({"reasoning_effort", "include_reasoning", "reasoning_format"})
 
 _client: AsyncOpenAI | None = None
 
@@ -30,7 +32,10 @@ _client: AsyncOpenAI | None = None
 def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
-        _client = AsyncOpenAI(base_url=provider()["base_url"], api_key=nim_api_key())
+        _client = wrap_openai(
+            AsyncOpenAI(base_url=provider()["base_url"], api_key=nim_api_key()),
+            tracing_extra={"metadata": {"service": "juris-backend"}},
+        )
     return _client
 
 
@@ -52,6 +57,13 @@ def _resolve_model(role_name: str) -> tuple[str, dict]:
     raise ValueError(f"role '{role_name}' is not a single-model role (got {type(entry).__name__})")
 
 
+def _split_params(params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Move provider-specific keys into extra_body for the OpenAI SDK."""
+    params = dict(params)
+    extra = {k: params.pop(k) for k in list(params) if k in _EXTRA_BODY_KEYS}
+    return params, extra
+
+
 async def call(
     role_name: str | None,
     messages: list[Message],
@@ -65,11 +77,14 @@ async def call(
 
     async def _once(model_id: str, extra_user: str | None = None) -> Any:
         msgs = messages + ([{"role": "user", "content": extra_user}] if extra_user else [])
-        kwargs: dict[str, Any] = {"model": model_id, "messages": msgs, "timeout": NIM_TIMEOUT, **params}
+        std, extra = _split_params(params)
+        kwargs: dict[str, Any] = {"model": model_id, "messages": msgs, "timeout": NIM_TIMEOUT, **std}
         if tools:
             kwargs["tools"] = tools
         if response_schema is not None:
             kwargs["response_format"] = {"type": "json_object"}
+        if extra:
+            kwargs["extra_body"] = extra
         async with _sem:
             return await _get_client().chat.completions.create(**kwargs)
 
@@ -103,17 +118,18 @@ async def chat(
     tool_choice: str | dict | None = None,
 ) -> Any:
     """One raw chat completion under the shared semaphore, returning the assistant
-    message object (.content, .tool_calls) for the v2 verifier loop.
+    message object (.content, .tool_calls) for the verifier loop.
     Callers may pass an explicit model_id or resolve a single-model role."""
     params: dict[str, Any] = {}
     if model_id is None:
         if role_name is None:
             raise ValueError("chat() requires model_id or role_name")
         model_id, params = _resolve_model(role_name)
-    kwargs: dict[str, Any] = {"model": model_id, "messages": messages, "timeout": timeout or NIM_TIMEOUT, **params}
+    std, extra = _split_params(params)
+    kwargs: dict[str, Any] = {"model": model_id, "messages": messages, "timeout": timeout or NIM_TIMEOUT, **std}
     if tools:
-        # parallel_tool_calls=False: some NIM models (e.g. llama-3.1-8b) 500 on multi
-        # tool-calls per turn ("only supports single tool-calls at once"). One at a time.
+        # parallel_tool_calls=False: gpt-oss on Groq does not support parallel tool calls;
+        # keep one-at-a-time for the verifier loop.
         kwargs["tools"] = tools
         kwargs["parallel_tool_calls"] = False
     if tool_choice is not None:
@@ -121,8 +137,8 @@ async def chat(
             {"type": "function", "function": {"name": tool_choice}}
             if isinstance(tool_choice, str) else tool_choice
         )
+    if extra:
+        kwargs["extra_body"] = extra
     async with _sem:
         resp = await _get_client().chat.completions.create(**kwargs)
     return resp.choices[0].message
-
-

@@ -1,11 +1,9 @@
-"""Synthesis tests retained for v2.
+"""Synthesis tests retained for v2 (Phase 1 stub).
 
-Offline tests exercise the VerdictCard gates via the pure build_card():
-citation-lock, tag whitelist, rebuttal <=400 + URL, slug/models_used, and
-rating->class. The decided path is now the v2 Verify loop, not consensus/trial.
+Offline tests exercise VerdictCard assembly via build_card(): rebuttal <=400 + URL,
+slug/models_used. Citation-lock and manipulation-tag whitelist were removed.
 """
 import json
-import types
 
 from conftest import needs_db
 
@@ -20,7 +18,6 @@ EV = [
         "content": "The Great Wall is not visible unaided from space.",
         "snippet": "The Great Wall is not visible unaided from space.",
         "fetch_failed": False,
-        "credibility": 0.85,
     },
     {
         "id": "e2",
@@ -29,7 +26,6 @@ EV = [
         "content": "Official source also rejects the claim.",
         "snippet": "Official source also rejects the claim.",
         "fetch_failed": False,
-        "credibility": 0.95,
     },
 ]
 
@@ -38,43 +34,31 @@ async def _emit(*a, **k):
     return None
 
 
-# --- citation-lock (hard gate) --------------------------------------------------
-def test_citation_lock_gate():
+def test_build_card_keeps_explanation():
     out = SynthOutput(
         one_liner_native="Yeh dava galat hai.",
-        explanation_native="The wall is not visible unaided [e:e1]. It was secretly built by aliens who control the weather.",
-        manipulation_tags=[], rebuttal_card_native="Galat dava. https://altnews.in/x")
+        explanation_native="The wall is not visible unaided.",
+        rebuttal_card_native="Galat dava. https://altnews.in/x")
     card = s6.build_card("cid-1", "claim en", "claim native", "FALSE", 90, "verify", EV, out)
-    assert "[e:e1]" in card.explanation_native
-    assert "aliens" not in card.explanation_native.lower()      # uncited factual sentence stripped
+    assert "wall is not visible" in card.explanation_native
+    assert card.manipulation_tags == []
 
 
-# --- tag whitelist --------------------------------------------------------------
-def test_tag_whitelist():
-    out = SynthOutput(one_liner_native="x", explanation_native="ok [e:e1].",
-                      manipulation_tags=["miracle-cure", "totally-made-up", "fake-urgency"],
-                      rebuttal_card_native="see https://pib.gov.in/y")
-    card = s6.build_card("cid-2", "c", "c", "FALSE", 80, "verify", EV, out)
-    assert set(card.manipulation_tags) == {"miracle-cure", "fake-urgency"}
-
-
-# --- rebuttal constraints -------------------------------------------------------
 def test_rebuttal_constraints():
-    no_url = SynthOutput(one_liner_native="x", explanation_native="ok [e:e1].",
-                         manipulation_tags=[], rebuttal_card_native="This claim is false, please verify before sharing.")
+    no_url = SynthOutput(one_liner_native="x", explanation_native="ok.",
+                         rebuttal_card_native="This claim is false, please verify before sharing.")
     card = s6.build_card("cid-3", "c", "c", "FALSE", 80, "verify", EV, no_url)
-    assert len(card.rebuttal_card_native) <= 400 and "http" in card.rebuttal_card_native   # URL appended
+    assert len(card.rebuttal_card_native) <= 400 and "http" in card.rebuttal_card_native
 
-    long = SynthOutput(one_liner_native="x", explanation_native="ok [e:e1].",
-                       manipulation_tags=[], rebuttal_card_native="x" * 600 + " https://pib.gov.in/y")
+    long = SynthOutput(one_liner_native="x", explanation_native="ok.",
+                       rebuttal_card_native="x" * 600 + " https://pib.gov.in/y")
     card2 = s6.build_card("cid-4", "c", "c", "FALSE", 80, "verify", EV, long)
-    assert len(card2.rebuttal_card_native) <= 400                # truncated
+    assert len(card2.rebuttal_card_native) <= 400
 
 
-# --- slug + models_used ---------------------------------------------------------
 def test_slug_and_models_used():
-    out = SynthOutput(one_liner_native="x", explanation_native="ok [e:e1].",
-                      manipulation_tags=[], rebuttal_card_native="https://pib.gov.in/y")
+    out = SynthOutput(one_liner_native="x", explanation_native="ok.",
+                      rebuttal_card_native="https://pib.gov.in/y")
     card = s6.build_card("abcd1234-0000-0000-0000-000000000000", "The Great Wall claim", "c",
                          "FALSE", 90, "verify", EV, out)
     assert card.slug.startswith("the-great-wall-claim-") and card.slug.endswith("abcd1234")
@@ -83,25 +67,10 @@ def test_slug_and_models_used():
     assert {"prosecutor", "defense", "judge"}.isdisjoint(card.models_used)
 
 
-def test_rating_to_class():
-    assert s6.rating_to_class("False") == "FALSE"
-    assert s6.rating_to_class("Misleading/Partly false") == "MISLEADING"
-    assert s6.rating_to_class("Mostly true") == "TRUE"
-    assert s6.rating_to_class(None) == "UNVERIFIABLE"
-
-
-# --- persistence + permalink round-trip (DB only; NIM faked) --------------------
 @needs_db
 async def test_persist_and_permalink(monkeypatch):
     from app import db
 
-    async def fake_call(role_name, messages, response_schema=None, **k):
-        return types.SimpleNamespace(parsed=SynthOutput(
-            one_liner_native="Yeh dava galat hai.",
-            explanation_native="The Great Wall is not visible unaided [e:e1].",
-            manipulation_tags=["miracle-cure"], rebuttal_card_native="Galat. https://altnews.in/x"))
-
-    monkeypatch.setattr(s6.nim, "call", fake_call)
     monkeypatch.setattr(s6.events, "emit", _emit)
 
     con = await (await db.pool()).acquire()
@@ -118,17 +87,15 @@ async def test_persist_and_permalink(monkeypatch):
             claim_en="Great Wall visible from space",
             claim_native="Great Wall visible from space",
             lang="en",
-            verdict="FALSE",
-            confidence=90,
-            path="verify",
-            evidence=EV)
-
-        row = await con.fetchrow("select verdict, confidence, card, path from verdicts where slug=$1", card.slug)
-        assert row is not None and row["verdict"] == "FALSE" and row["path"] == "verify"
-        assert row["confidence"] == 90
-        stored = json.loads(row["card"])
-        assert stored["slug"] == card.slug and stored["one_liner_native"] == "Yeh dava galat hai."
-        assert "aliens" not in stored["explanation_native"].lower()
+            verdict="FALSE", confidence=90, path="verify", evidence=EV,
+            original="Great Wall visible from space",
+            explanation_seed="The Great Wall is not visible unaided.")
+        row = await con.fetchrow("select slug, verdict, card from verdicts where claim_id = $1", claim_id)
+        assert row["slug"] == card.slug and row["verdict"] == "FALSE"
+        dumped = json.loads(row["card"]) if isinstance(row["card"], str) else row["card"]
+        assert "not visible" in dumped["explanation_native"]
+        await con.execute("delete from verdicts where claim_id = $1", claim_id)
+        await con.execute("delete from claims where id = $1", claim_id)
+        await con.execute("delete from submissions where id = $1", sub)
     finally:
-        await con.execute("delete from submissions where id = $1", sub)   # cascades claims + verdicts
         await (await db.pool()).release(con)
