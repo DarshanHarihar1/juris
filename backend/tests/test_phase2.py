@@ -2,6 +2,9 @@
 
 Covers the search/fetch helpers that underpin the Verify loop.
 """
+import logging
+
+import httpx
 import pytest
 
 pytestmark = pytest.mark.asyncio
@@ -53,6 +56,65 @@ async def test_fetch_page_uses_jina_reader(monkeypatch):
     assert seen["url"] == "https://r.jina.ai/https://www.cricbuzz.com/live-cricket-scorecard/123"
     assert seen["headers"]["Authorization"] == "Bearer test-key"
     assert seen["headers"]["X-Return-Format"] == "markdown"
+
+
+async def test_web_search_hostport_gets_http_scheme(monkeypatch):
+    from app.services import search
+
+    seen = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": []}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, params=None):
+            seen["url"] = url
+            return _Resp()
+
+    monkeypatch.setenv("SEARXNG_URL", "juris-searxng:8080")
+    monkeypatch.setattr(search.httpx, "AsyncClient", _Client)
+
+    await search.web_search("test")
+    assert seen["url"] == "http://juris-searxng:8080/search"
+
+
+async def test_web_search_logs_request_errors(monkeypatch, caplog):
+    from app.services import search
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, params=None):
+            raise httpx.ConnectError("connection refused", request=httpx.Request("GET", url))
+
+    monkeypatch.setenv("SEARXNG_URL", "juris-searxng:8080")
+    monkeypatch.setattr(search.httpx, "AsyncClient", _Client)
+
+    with caplog.at_level(logging.ERROR, logger="juris.search"):
+        rows = await search.web_search("test query")
+
+    assert rows == []
+    assert any("SearXNG request failed" in r.message for r in caplog.records)
 
 
 async def test_web_search_unwraps_google_redirect_urls(monkeypatch):

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { API_URL } from "@/lib/config";
 import { EventRow, VerdictCard } from "@/lib/types";
 import { StageRail } from "@/components/StageRail";
 import { EvidenceCard } from "@/components/EvidenceCard";
@@ -78,6 +79,21 @@ export default function TrialPage({ params }: { params: { id: string } }) {
         .order("id")
         .then(({ data }) => active && data && add(data as EventRow[]));
 
+    const apiBackfill = () =>
+      fetch(`${API_URL}/api/jobs/${id}/events`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((body) => {
+          if (!active || !body?.events) return;
+          add(
+            body.events.map((row: EventRow) => ({
+              ...row,
+              job_id: id,
+            }))
+          );
+        })
+        .catch(() => {});
+
+    apiBackfill();
     backfill(); // catch anything before the subscription attached
     const channel = supabase
       .channel(`job:${id}`)
@@ -88,7 +104,10 @@ export default function TrialPage({ params }: { params: { id: string } }) {
       )
       .subscribe();
     // safety re-poll: back-fills any event missed across a reconnect
-    const poll = setInterval(backfill, 5000);
+    const poll = setInterval(() => {
+      apiBackfill();
+      backfill();
+    }, 5000);
 
     return () => {
       active = false;

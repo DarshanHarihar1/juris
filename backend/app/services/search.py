@@ -3,6 +3,7 @@ rows. Provider failures degrade to [] / {} so retrieval never crashes the pipeli
 import asyncio
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+import logging
 import os
 import re
 from urllib.parse import parse_qs, urlparse
@@ -11,8 +12,20 @@ import httpx
 
 from ..config import thresholds
 
+log = logging.getLogger("juris.search")
+
 _TIMEOUT = 10.0
 _DATE_RE = re.compile(r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b")
+
+
+def _searxng_base() -> str | None:
+    """Render hostport is `service:port` with no scheme; httpx needs http://."""
+    raw = os.environ.get("SEARXNG_URL", "").strip()
+    if not raw:
+        return None
+    if raw.startswith(("http://", "https://")):
+        return raw.rstrip("/")
+    return f"http://{raw.rstrip('/')}"
 
 
 def _domain(url: str) -> str:
@@ -40,8 +53,9 @@ async def web_search(
 ) -> list[dict]:
     """General web search via SearXNG (private Render service). SEARXNG_URL unset or
     unreachable → []. recency ∈ {day,week,month,year}."""
-    base = os.environ.get("SEARXNG_URL")
+    base = _searxng_base()
     if not base:
+        log.warning("web_search skipped: SEARXNG_URL is unset")
         return []
     q = f"site:{site} {query}" if site else query
     params = {"q": q, "format": "json"}
@@ -49,13 +63,30 @@ async def web_search(
         params["time_range"] = recency
     if categories:
         params["categories"] = categories
+    url = f"{base}/search"
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-            r = await c.get(f"{base.rstrip('/')}/search", params=params)
+            r = await c.get(url, params=params)
             r.raise_for_status()
             results = r.json().get("results", [])
+    except httpx.TimeoutException as exc:
+        log.error("SearXNG timeout url=%s query=%r: %s", url, q, exc)
+        return []
+    except httpx.HTTPStatusError as exc:
+        log.error(
+            "SearXNG HTTP %s url=%s query=%r body=%r: %s",
+            exc.response.status_code, url, q, exc.response.text[:200], exc,
+        )
+        return []
+    except httpx.RequestError as exc:
+        log.error("SearXNG request failed url=%s query=%r: %s", url, q, exc)
+        return []
+    except ValueError as exc:
+        log.error("SearXNG invalid JSON url=%s query=%r: %s", url, q, exc)
+        return []
     except Exception:
-        return []                               # SearXNG down → empty, never crash
+        log.exception("SearXNG unexpected error url=%s query=%r", url, q)
+        return []
     return [
         {"url": canonical_url(x.get("url", "")), "title": x.get("title"), "snippet": x.get("content"),
          "domain": _domain(canonical_url(x.get("url", ""))), "published_at": x.get("publishedDate"),
@@ -217,10 +248,24 @@ async def fetch_page(url: str) -> dict:
     key = os.environ.get("JINA_API_KEY")
     if key:
         headers["Authorization"] = f"Bearer {key}"
+    jina_url = f"https://r.jina.ai/{url}"
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as c:
-            r = await c.get(f"https://r.jina.ai/{url}", headers=headers)
+            r = await c.get(jina_url, headers=headers)
             r.raise_for_status()
             return {"url": url, "text": r.text[:4000]}
+    except httpx.TimeoutException as exc:
+        log.warning("Jina fetch timeout url=%r: %s", url, exc)
+        return {}
+    except httpx.HTTPStatusError as exc:
+        log.warning(
+            "Jina fetch HTTP %s url=%r body=%r: %s",
+            exc.response.status_code, url, exc.response.text[:120], exc,
+        )
+        return {}
+    except httpx.RequestError as exc:
+        log.warning("Jina fetch request failed url=%r: %s", url, exc)
+        return {}
     except Exception:
+        log.exception("Jina fetch unexpected error url=%r", url)
         return {}
