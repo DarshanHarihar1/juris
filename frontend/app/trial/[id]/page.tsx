@@ -160,14 +160,6 @@ export default function TrialPage({ params }: { params: { id: string } }) {
         {verdict && (
           <section>
             <VerdictCardView card={verdict} />
-            <div className="mt-3 text-center">
-              <a
-                href={`/v/${verdict.slug}`}
-                className="font-mono text-xs text-muted transition hover:text-ink"
-              >
-                permalink → /v/{verdict.slug}
-              </a>
-            </div>
           </section>
         )}
       </div>

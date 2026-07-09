@@ -61,14 +61,6 @@ export function VerdictCardView({ card }: { card: VerdictCard }) {
       )}
 
       <RebuttalCard text={card.rebuttal_card_native} />
-
-      {card.models_used && Object.keys(card.models_used).length > 0 && (
-        <div className="mt-4 font-mono text-[10px] leading-relaxed text-muted/60">
-          {Object.entries(card.models_used)
-            .map(([role, m]) => `${role}: ${String(m).split("/").pop()}`)
-            .join("  ·  ")}
-        </div>
-      )}
     </div>
   );
 }

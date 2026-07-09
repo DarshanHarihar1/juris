@@ -140,9 +140,6 @@ export default function Home() {
             {err && <p className="mt-3 text-sm text-verdict-false">{err}</p>}
           </div>
 
-          <p className="mt-8 text-xs text-muted/70 font-mono">
-            text · url · image · powered by NVIDIA NIM
-          </p>
         </div>
       </div>
     </main>
