@@ -119,13 +119,15 @@ async def _seed_search(question: str) -> str:
 async def _answer_question(
     question: str, claim_en: str, claim_native: str,
     model: str, tool_names: list[str], time_sensitive: bool,
+    claim_seed: str = "",
 ) -> QuestionAnswer | None:
     """One investigator's ReAct loop to answer a single sub-question."""
     cap = thresholds().get("max_tool_calls_per_investigator", 3)
     avail = [t for t in tool_names if t in tools.REGISTRY]
     schemas = tools.schemas(avail)
     seed = (await _seed_search(question)) if time_sensitive else ""
-    seed_block = f"\n\n{seed}" if seed else ""
+    combined_seed = "\n\n".join(s for s in (seed, claim_seed) if s)
+    seed_block = f"\n\n{combined_seed}" if combined_seed else ""
     messages: list[dict] = [
         {"role": "system", "content": QA_SYSTEM.format(cap=cap, today=date.today().isoformat())},
         {"role": "user", "content": (
@@ -176,8 +178,10 @@ async def _answer_question(
     )
 
 
-# ponytail: LLMs hallucinate example.com/placeholder.com when search returns empty
+# ponytail: LLMs hallucinate example.com/placeholder.com when search returns empty;
+# google/bing search SERPs are never real content — filter both.
 _HALLUCINATED_DOMAINS = frozenset({"example.com", "example.org", "example.net", "placeholder.com"})
+_SERP_PREFIXES = ("google.com/search", "bing.com/search", "duckduckgo.com/?q=", "search.yahoo.com/search")
 
 
 def _to_evidence_rows(qa: QuestionAnswer, found_by: str) -> list[dict]:
@@ -190,6 +194,8 @@ def _to_evidence_rows(qa: QuestionAnswer, found_by: str) -> list[dict]:
         dom = _domain(url)
         if dom in _HALLUCINATED_DOMAINS:
             continue  # filter LLM-hallucinated placeholder sources
+        if any(p in url for p in _SERP_PREFIXES):
+            continue  # filter search engine result pages — not real content
         rows.append({
             "url": url, "domain": dom,
             "title": src.title or "", "snippet": src.snippet or "",
@@ -230,6 +236,10 @@ async def investigate(con, job_id, claim_id, claim_en: str, claim_native: str) -
     investigators = role("investigators")
     per_q_budget = INVESTIGATOR_BUDGET / max(len(questions), 1)
 
+    # When time_sensitive, also seed-search the original claim so investigators
+    # have direct evidence about it even when sub-questions are off-target.
+    claim_seed = (await _seed_search(claim_en)) if decomposed.time_sensitive else ""
+
     # Step 2: answer all (question × investigator) tasks fully in parallel
     tasks = [(q, inv) for q in questions for inv in investigators]
     results = await asyncio.gather(*[
@@ -238,6 +248,7 @@ async def investigate(con, job_id, claim_id, claim_en: str, claim_native: str) -
                 q, claim_en, claim_native,
                 inv["model"], inv.get("tools", []),
                 decomposed.time_sensitive,
+                claim_seed=claim_seed,
             ),
             timeout=per_q_budget,
         )
