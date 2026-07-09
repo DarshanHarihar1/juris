@@ -37,6 +37,45 @@ async def test_tools_standalone(monkeypatch):
     assert tools.schemas(["web_search"])[0]["function"]["name"] == "web_search"
 
 
+async def test_fetch_page_uses_jina_reader(monkeypatch):
+    from app.services import search
+
+    seen = {}
+
+    class _Resp:
+        text = "# rendered markdown"
+
+        def raise_for_status(self):
+            return None
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            seen["url"] = url
+            seen["headers"] = headers or {}
+            return _Resp()
+
+    monkeypatch.setenv("JINA_API_KEY", "test-key")
+    monkeypatch.setattr(search.httpx, "AsyncClient", _Client)
+
+    page = await search.fetch_page("https://www.cricbuzz.com/live-cricket-scorecard/123")
+    assert page == {
+        "url": "https://www.cricbuzz.com/live-cricket-scorecard/123",
+        "text": "# rendered markdown",
+    }
+    assert seen["url"] == "https://r.jina.ai/https://www.cricbuzz.com/live-cricket-scorecard/123"
+    assert seen["headers"]["Authorization"] == "Bearer test-key"
+    assert seen["headers"]["X-Return-Format"] == "markdown"
+
+
 # --- embeddings + cache ---------------------------------------------------------
 @needs_nim
 async def test_embed_dims():
