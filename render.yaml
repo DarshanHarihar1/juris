@@ -35,8 +35,10 @@ services:
         sync: false
       - key: WA_HASH_SALT
         sync: false
-      - key: SEARXNG_URL              # internal URL of the searxng service
-        fromService: { name: juris-searxng, type: web, property: hostport }
+      - key: SEARXNG_URL
+        # Free-tier web services cannot receive private-network inbound traffic.
+        # Use the public URL; internal hostport (juris-searxng:8080) fails DNS on free plan.
+        value: https://juris-searxng.onrender.com
       # LangSmith tracing (optional — unset/false = no-op; jobs still run)
       - key: LANGSMITH_TRACING
         value: "true"
