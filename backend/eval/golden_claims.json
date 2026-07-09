@@ -1,0 +1,289 @@
+{
+  "version": 1,
+  "notes": [
+    "Golden verdict labels are for verdict-class scoring only.",
+    "The breaking bucket is intentionally refresh-required: replace these examples with claims from the last 7 days before treating breaking results as a release gate."
+  ],
+  "cases": [
+    {
+      "id": "static_true_01",
+      "bucket": "static_true",
+      "claim": "The Eiffel Tower is in Paris.",
+      "expected_verdict": "TRUE"
+    },
+    {
+      "id": "static_true_02",
+      "bucket": "static_true",
+      "claim": "The Earth orbits the Sun.",
+      "expected_verdict": "TRUE"
+    },
+    {
+      "id": "static_true_03",
+      "bucket": "static_true",
+      "claim": "Water boils at 100 degrees Celsius at sea level.",
+      "expected_verdict": "TRUE"
+    },
+    {
+      "id": "static_true_04",
+      "bucket": "static_true",
+      "claim": "Tokyo is the capital of Japan.",
+      "expected_verdict": "TRUE"
+    },
+    {
+      "id": "static_true_05",
+      "bucket": "static_true",
+      "claim": "DNA has a double-helix structure.",
+      "expected_verdict": "TRUE"
+    },
+    {
+      "id": "static_true_06",
+      "bucket": "static_true",
+      "claim": "Mount Everest is the highest mountain above sea level.",
+      "expected_verdict": "TRUE"
+    },
+    {
+      "id": "static_true_07",
+      "bucket": "static_true",
+      "claim": "The Pacific Ocean is the largest ocean on Earth.",
+      "expected_verdict": "TRUE"
+    },
+    {
+      "id": "static_true_08",
+      "bucket": "static_true",
+      "claim": "The human heart has four chambers.",
+      "expected_verdict": "TRUE"
+    },
+    {
+      "id": "static_true_09",
+      "bucket": "static_true",
+      "claim": "Leonardo da Vinci painted the Mona Lisa.",
+      "expected_verdict": "TRUE"
+    },
+    {
+      "id": "static_true_10",
+      "bucket": "static_true",
+      "claim": "India became independent on August 15, 1947.",
+      "expected_verdict": "TRUE"
+    },
+    {
+      "id": "static_false_hoax_01",
+      "bucket": "static_false_hoax",
+      "claim": "The Great Wall of China is visible from space with the naked eye.",
+      "expected_verdict": "FALSE"
+    },
+    {
+      "id": "static_false_hoax_02",
+      "bucket": "static_false_hoax",
+      "claim": "Vaccines cause autism.",
+      "expected_verdict": "FALSE"
+    },
+    {
+      "id": "static_false_hoax_03",
+      "bucket": "static_false_hoax",
+      "claim": "Drinking lemon water cures cancer.",
+      "expected_verdict": "FALSE"
+    },
+    {
+      "id": "static_false_hoax_04",
+      "bucket": "static_false_hoax",
+      "claim": "The Earth is flat.",
+      "expected_verdict": "FALSE"
+    },
+    {
+      "id": "static_false_hoax_05",
+      "bucket": "static_false_hoax",
+      "claim": "Humans use only 10 percent of their brains.",
+      "expected_verdict": "FALSE"
+    },
+    {
+      "id": "static_false_hoax_06",
+      "bucket": "static_false_hoax",
+      "claim": "COVID-19 vaccines contain tracking microchips.",
+      "expected_verdict": "FALSE"
+    },
+    {
+      "id": "static_false_hoax_07",
+      "bucket": "static_false_hoax",
+      "claim": "NASA confirmed Earth will experience 15 days of darkness in November.",
+      "expected_verdict": "FALSE"
+    },
+    {
+      "id": "static_false_hoax_08",
+      "bucket": "static_false_hoax",
+      "claim": "Drinking hot water kills the coronavirus in the body.",
+      "expected_verdict": "FALSE"
+    },
+    {
+      "id": "static_false_hoax_09",
+      "bucket": "static_false_hoax",
+      "claim": "UNESCO removed the Taj Mahal from the World Heritage list.",
+      "expected_verdict": "FALSE"
+    },
+    {
+      "id": "static_false_hoax_10",
+      "bucket": "static_false_hoax",
+      "claim": "Bananas have been deliberately infected with HIV-contaminated blood.",
+      "expected_verdict": "FALSE"
+    },
+    {
+      "id": "slow_changing_01",
+      "bucket": "slow_changing",
+      "claim": "As of July 2026, Narendra Modi is the Prime Minister of India.",
+      "expected_verdict": "TRUE",
+      "note": "Refresh if India has an early change in prime minister."
+    },
+    {
+      "id": "slow_changing_02",
+      "bucket": "slow_changing",
+      "claim": "As of July 2026, Droupadi Murmu is the President of India.",
+      "expected_verdict": "TRUE",
+      "note": "Refresh after the next Indian presidential transition."
+    },
+    {
+      "id": "slow_changing_03",
+      "bucket": "slow_changing",
+      "claim": "As of July 2026, Surya Kant is the Chief Justice of India.",
+      "expected_verdict": "TRUE",
+      "note": "Refresh when the Chief Justice of India changes."
+    },
+    {
+      "id": "slow_changing_04",
+      "bucket": "slow_changing",
+      "claim": "As of July 2026, Keir Starmer is the Prime Minister of the United Kingdom.",
+      "expected_verdict": "TRUE",
+      "note": "Refresh if the UK government changes."
+    },
+    {
+      "id": "slow_changing_05",
+      "bucket": "slow_changing",
+      "claim": "As of July 2026, Donald Trump is the President of the United States.",
+      "expected_verdict": "TRUE",
+      "note": "Refresh after the next US presidential transition or if office changes earlier."
+    },
+    {
+      "id": "slow_changing_06",
+      "bucket": "slow_changing",
+      "claim": "As of July 2026, Emmanuel Macron is the President of France.",
+      "expected_verdict": "TRUE",
+      "note": "Refresh after France's next presidential transition."
+    },
+    {
+      "id": "slow_changing_07",
+      "bucket": "slow_changing",
+      "claim": "As of July 2026, Satya Nadella is the CEO of Microsoft.",
+      "expected_verdict": "TRUE",
+      "note": "Refresh if Microsoft changes CEO."
+    },
+    {
+      "id": "slow_changing_08",
+      "bucket": "slow_changing",
+      "claim": "As of July 2026, Sam Altman is the CEO of OpenAI.",
+      "expected_verdict": "TRUE",
+      "note": "Refresh if OpenAI changes CEO."
+    },
+    {
+      "id": "slow_changing_09",
+      "bucket": "slow_changing",
+      "claim": "As of July 2026, Siddaramaiah is the Chief Minister of Karnataka.",
+      "expected_verdict": "TRUE",
+      "note": "Refresh if Karnataka changes chief minister."
+    },
+    {
+      "id": "slow_changing_10",
+      "bucket": "slow_changing",
+      "claim": "As of July 2026, Rishi Sunak is the Prime Minister of the United Kingdom.",
+      "expected_verdict": "FALSE",
+      "note": "Refresh if the UK government changes."
+    },
+    {
+      "id": "breaking_01",
+      "bucket": "breaking",
+      "claim": "REFRESH REQUIRED: Replace with a claim about a major court ruling reported in the last 7 days.",
+      "expected_verdict": "UNVERIFIABLE",
+      "acceptable_verdicts": ["UNVERIFIABLE"],
+      "refresh_required": true,
+      "note": "Breaking evals must be refreshed each run; placeholder should not be treated as a live benchmark claim."
+    },
+    {
+      "id": "breaking_02",
+      "bucket": "breaking",
+      "claim": "REFRESH REQUIRED: Replace with a claim about a national election result reported in the last 7 days.",
+      "expected_verdict": "UNVERIFIABLE",
+      "acceptable_verdicts": ["UNVERIFIABLE"],
+      "refresh_required": true,
+      "note": "Breaking evals must be refreshed each run; placeholder should not be treated as a live benchmark claim."
+    },
+    {
+      "id": "breaking_03",
+      "bucket": "breaking",
+      "claim": "REFRESH REQUIRED: Replace with a claim about a cabinet appointment reported in the last 7 days.",
+      "expected_verdict": "UNVERIFIABLE",
+      "acceptable_verdicts": ["UNVERIFIABLE"],
+      "refresh_required": true,
+      "note": "Breaking evals must be refreshed each run; placeholder should not be treated as a live benchmark claim."
+    },
+    {
+      "id": "breaking_04",
+      "bucket": "breaking",
+      "claim": "REFRESH REQUIRED: Replace with a claim about an ongoing natural disaster reported in the last 7 days.",
+      "expected_verdict": "UNVERIFIABLE",
+      "acceptable_verdicts": ["UNVERIFIABLE"],
+      "refresh_required": true,
+      "note": "Breaking evals must be refreshed each run; placeholder should not be treated as a live benchmark claim."
+    },
+    {
+      "id": "breaking_05",
+      "bucket": "breaking",
+      "claim": "REFRESH REQUIRED: Replace with a claim about a live sports result reported in the last 7 days.",
+      "expected_verdict": "UNVERIFIABLE",
+      "acceptable_verdicts": ["UNVERIFIABLE"],
+      "refresh_required": true,
+      "note": "Breaking evals must be refreshed each run; placeholder should not be treated as a live benchmark claim."
+    },
+    {
+      "id": "breaking_06",
+      "bucket": "breaking",
+      "claim": "REFRESH REQUIRED: Replace with a claim about a public-health alert reported in the last 7 days.",
+      "expected_verdict": "UNVERIFIABLE",
+      "acceptable_verdicts": ["UNVERIFIABLE"],
+      "refresh_required": true,
+      "note": "Breaking evals must be refreshed each run; placeholder should not be treated as a live benchmark claim."
+    },
+    {
+      "id": "breaking_07",
+      "bucket": "breaking",
+      "claim": "REFRESH REQUIRED: Replace with a claim about a company leadership change reported in the last 7 days.",
+      "expected_verdict": "UNVERIFIABLE",
+      "acceptable_verdicts": ["UNVERIFIABLE"],
+      "refresh_required": true,
+      "note": "Breaking evals must be refreshed each run; placeholder should not be treated as a live benchmark claim."
+    },
+    {
+      "id": "breaking_08",
+      "bucket": "breaking",
+      "claim": "REFRESH REQUIRED: Replace with a claim about a newly announced law or regulation from the last 7 days.",
+      "expected_verdict": "UNVERIFIABLE",
+      "acceptable_verdicts": ["UNVERIFIABLE"],
+      "refresh_required": true,
+      "note": "Breaking evals must be refreshed each run; placeholder should not be treated as a live benchmark claim."
+    },
+    {
+      "id": "breaking_09",
+      "bucket": "breaking",
+      "claim": "REFRESH REQUIRED: Replace with a claim about a stock-market or commodity-price move from the last 7 days.",
+      "expected_verdict": "UNVERIFIABLE",
+      "acceptable_verdicts": ["UNVERIFIABLE"],
+      "refresh_required": true,
+      "note": "Breaking evals must be refreshed each run; placeholder should not be treated as a live benchmark claim."
+    },
+    {
+      "id": "breaking_10",
+      "bucket": "breaking",
+      "claim": "REFRESH REQUIRED: Replace with a claim about a viral image or video from the last 7 days.",
+      "expected_verdict": "UNVERIFIABLE",
+      "acceptable_verdicts": ["UNVERIFIABLE"],
+      "refresh_required": true,
+      "note": "Breaking evals must be refreshed each run; placeholder should not be treated as a live benchmark claim."
+    }
+  ]
+}

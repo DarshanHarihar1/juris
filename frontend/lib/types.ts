@@ -1,13 +1,10 @@
-// Event log rows (LLD §3.2) streamed from Supabase Realtime, and the VerdictCard (§4.5).
+// Event log rows streamed from Supabase Realtime, and the verdict card shown on permalinks.
 
 export type EventName =
   | "stage"
   | "claim"
   | "evidence"
-  | "vote"
-  | "escalation"
-  | "argument"
-  | "ruling"
+  | "verify_step"
   | "verdict"
   | "terminal";
 
@@ -22,6 +19,7 @@ export interface EventRow {
 export type VerdictClass =
   | "TRUE"
   | "FALSE"
+  | "MOSTLY_TRUE"
   | "MISLEADING"
   | "UNVERIFIABLE"
   | "CONFLICTING";
@@ -44,33 +42,26 @@ export interface VerdictCard {
   manipulation_tags: string[];
   evidence: EvidenceRef[];
   rebuttal_card_native: string;
-  path: "cache" | "precedent" | "consensus" | "trial";
+  path: "verify";
   models_used: Record<string, string>;
 }
 
 export const STAGES = [
-  "S0_INTAKE",
-  "S1_NORMALIZE",
-  "S2_PRECEDENT",
-  "S3_INVESTIGATE",
-  "S4_FASTPATH",
-  "S5_TRIAL",
-  "S6_SYNTHESIZE",
+  "NORMALIZE",
+  "VERIFY",
+  "SYNTHESIZE",
 ] as const;
 
 export const STAGE_LABEL: Record<string, string> = {
-  S0_INTAKE: "Intake",
-  S1_NORMALIZE: "Normalize",
-  S2_PRECEDENT: "Precedent",
-  S3_INVESTIGATE: "Investigate",
-  S4_FASTPATH: "Jury",
-  S5_TRIAL: "Trial",
-  S6_SYNTHESIZE: "Verdict",
+  NORMALIZE: "Normalize",
+  VERIFY: "Verify",
+  SYNTHESIZE: "Synthesize",
 };
 
 export const VERDICT_COLOR: Record<VerdictClass, string> = {
   TRUE: "text-verdict-true",
   FALSE: "text-verdict-false",
+  MOSTLY_TRUE: "text-verdict-true",
   MISLEADING: "text-verdict-misleading",
   UNVERIFIABLE: "text-verdict-unverifiable",
   CONFLICTING: "text-verdict-conflicting",
@@ -79,6 +70,7 @@ export const VERDICT_COLOR: Record<VerdictClass, string> = {
 export const VERDICT_DOT: Record<VerdictClass, string> = {
   TRUE: "bg-verdict-true",
   FALSE: "bg-verdict-false",
+  MOSTLY_TRUE: "bg-verdict-true",
   MISLEADING: "bg-verdict-misleading",
   UNVERIFIABLE: "bg-verdict-unverifiable",
   CONFLICTING: "bg-verdict-conflicting",

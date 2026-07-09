@@ -10,13 +10,13 @@ from typing import Any
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
-from ..config import cfg, nim_api_key, provider, role
+from ..config import nim_api_key, provider, role
 
 Message = dict[str, Any]
 Tool = dict[str, Any]
 
 # Global semaphore shared by every call — caps concurrent in-flight NIM requests
-# so fan-out (2 investigators + 3 jurors + trial) stays under the free-tier ceiling.
+# so concurrent claim verification stays under the free-tier ceiling.
 # ponytail: concurrency cap, not a token-bucket. Add time-based limiting if 429s persist.
 _sem = asyncio.Semaphore(provider().get("rate_limit", 40))
 
@@ -59,7 +59,7 @@ async def call(
     response_schema: type[BaseModel] | None = None,
     model_id: str | None = None,
 ) -> NimResponse:
-    # model_id override: for list-roles like fastpath_jury, the caller picks the model.
+    # model_id override remains available for explicit one-off model calls.
     model, params = (model_id, {}) if model_id else _resolve_model(role_name)
     fallback = provider()["fallback_model"]
 
@@ -93,30 +93,36 @@ async def call(
         return _wrap(resp, fallback)
 
 
-async def chat(model_id: str, messages: list[Message], tools: list[Tool] | None = None) -> Any:
+async def chat(
+    model_id: str | None,
+    messages: list[Message],
+    tools: list[Tool] | None = None,
+    *,
+    role_name: str | None = None,
+    timeout: float | None = None,
+    tool_choice: str | dict | None = None,
+) -> Any:
     """One raw chat completion under the shared semaphore, returning the assistant
-    message object (.content, .tool_calls) for agentic tool loops (S3 investigators).
-    Unlike call(), this takes an explicit model_id (investigators aren't a single-model
-    role) and does no schema validation — the caller drives the tool loop."""
-    kwargs: dict[str, Any] = {"model": model_id, "messages": messages, "timeout": NIM_TIMEOUT}
+    message object (.content, .tool_calls) for the v2 verifier loop.
+    Callers may pass an explicit model_id or resolve a single-model role."""
+    params: dict[str, Any] = {}
+    if model_id is None:
+        if role_name is None:
+            raise ValueError("chat() requires model_id or role_name")
+        model_id, params = _resolve_model(role_name)
+    kwargs: dict[str, Any] = {"model": model_id, "messages": messages, "timeout": timeout or NIM_TIMEOUT, **params}
     if tools:
         # parallel_tool_calls=False: some NIM models (e.g. llama-3.1-8b) 500 on multi
         # tool-calls per turn ("only supports single tool-calls at once"). One at a time.
         kwargs["tools"] = tools
         kwargs["parallel_tool_calls"] = False
+    if tool_choice is not None:
+        kwargs["tool_choice"] = (
+            {"type": "function", "function": {"name": tool_choice}}
+            if isinstance(tool_choice, str) else tool_choice
+        )
     async with _sem:
         resp = await _get_client().chat.completions.create(**kwargs)
     return resp.choices[0].message
 
 
-async def embed(texts: list[str], input_type: str = "query") -> list[list[float]]:
-    """Embeddings via NIM (1024-dim, matches claims.embedding vector(1024)). NVIDIA
-    embed NIMs require input_type ("query"/"passage") + truncate. We use "query" for
-    both store and lookup so claim-vs-claim cache similarity stays symmetric."""
-    emb_role = cfg()["roles"]["embeddings"]
-    async with _sem:
-        resp = await _get_client().embeddings.create(
-            model=emb_role["model"], input=texts,
-            extra_body={"input_type": input_type, "truncate": "END"},
-        )
-    return [d.embedding for d in resp.data]

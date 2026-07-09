@@ -5,9 +5,57 @@ import { supabase } from "@/lib/supabase";
 import { EventRow, VerdictCard } from "@/lib/types";
 import { StageRail } from "@/components/StageRail";
 import { EvidenceCard } from "@/components/EvidenceCard";
-import { ArgumentBubble } from "@/components/ArgumentBubble";
 import { VerdictCardView } from "@/components/VerdictCardView";
 import { Wordmark } from "@/components/Wordmark";
+
+type VerifyStep = {
+  step?: number;
+  thought_summary?: string;
+  query?: string;
+  settled?: boolean;
+};
+
+function textValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function claimText(claim: Record<string, any>): string {
+  return (
+    textValue(claim.text_norm_native) ??
+    textValue(claim.text_norm) ??
+    textValue(claim.text) ??
+    textValue(claim.claim) ??
+    "Claim received"
+  );
+}
+
+function VerifyStepRow({ entry }: { entry: VerifyStep }) {
+  const settled = entry.settled === true;
+  return (
+    <div className="animate-fade-up rounded-lg border border-line bg-white px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="font-mono text-[11px] uppercase tracking-wide text-muted">
+          Step {entry.step ?? "?"}
+        </div>
+        <span
+          className={`rounded-full px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
+            settled ? "bg-verdict-true/10 text-verdict-true" : "bg-paper text-muted"
+          }`}
+        >
+          {settled ? "Settled" : "Searching"}
+        </span>
+      </div>
+      {entry.thought_summary && (
+        <p className="mt-2 text-sm leading-relaxed text-ink/85">{entry.thought_summary}</p>
+      )}
+      {entry.query && (
+        <div className="mt-2 rounded-md bg-paper px-3 py-2 font-mono text-xs text-muted">
+          {entry.query}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function TrialPage({ params }: { params: { id: string } }) {
   const { id } = params;
@@ -52,12 +100,9 @@ export default function TrialPage({ params }: { params: { id: string } }) {
   // derive view state from the ordered event log
   const stageStatus: Record<string, "started" | "done"> = {};
   const evidence: Record<string, any>[] = [];
-  const args: Record<string, any>[] = [];
+  const verifySteps: VerifyStep[] = [];
   let claim: any = null;
   let terminal: any = null;
-  let ruling: any = null;
-  let jury: any = null;
-  let escalated = false;
   let verdict: VerdictCard | null = null;
 
   for (const e of events) {
@@ -65,13 +110,10 @@ export default function TrialPage({ params }: { params: { id: string } }) {
     switch (e.event) {
       case "stage":
         stageStatus[d.stage] = d.status;
-        if (d.stage === "S4_FASTPATH" && d.status === "done") jury = d;
         break;
       case "claim": claim = d; break;
       case "evidence": evidence.push(d); break;
-      case "escalation": escalated = true; break;
-      case "argument": args.push(d); break;
-      case "ruling": ruling = d; break;
+      case "verify_step": verifySteps.push(d); break;
       case "verdict": verdict = d as VerdictCard; break;
       case "terminal": terminal = d; break;
     }
@@ -86,26 +128,42 @@ export default function TrialPage({ params }: { params: { id: string } }) {
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
           <Wordmark />
           <div className="hidden sm:block">
-            <StageRail stageStatus={stageStatus} escalated={escalated} finished={finished} />
+            <StageRail stageStatus={stageStatus} finished={finished} />
           </div>
         </div>
         <div className="mt-2 overflow-x-auto sm:hidden">
-          <StageRail stageStatus={stageStatus} escalated={escalated} finished={finished} />
+          <StageRail stageStatus={stageStatus} finished={finished} />
         </div>
       </header>
 
       <div className="mx-auto max-w-2xl space-y-8 px-6 py-8">
         {!started && (
           <div className="animate-pulse-soft py-20 text-center text-muted">
-            <p className="font-mono text-sm">waking the courtroom…</p>
+            <p className="font-mono text-sm">starting the investigation...</p>
             <p className="mt-2 text-xs text-muted/60">the free instance may cold-start (~30s)</p>
           </div>
         )}
 
         {claim && (
-          <section className="animate-fade-up">
+          <section className="animate-fade-up rounded-2xl border border-line bg-white p-5">
             <div className="font-mono text-[11px] uppercase tracking-wide text-muted">Claim</div>
-            <p className="mt-1 text-lg font-medium leading-snug">{claim.text_norm}</p>
+            <p className="mt-2 text-xl font-semibold leading-snug tracking-tight">
+              {claimText(claim)}
+            </p>
+            {(claim.volatility || claim.as_of_date) && (
+              <div className="mt-3 flex flex-wrap gap-2 font-mono text-[11px] uppercase tracking-wide text-muted">
+                {claim.volatility && (
+                  <span className="rounded-full border border-line px-2.5 py-1">
+                    {claim.volatility}
+                  </span>
+                )}
+                {claim.as_of_date && (
+                  <span className="rounded-full border border-line px-2.5 py-1">
+                    as of {claim.as_of_date}
+                  </span>
+                )}
+              </div>
+            )}
           </section>
         )}
 
@@ -120,7 +178,7 @@ export default function TrialPage({ params }: { params: { id: string } }) {
             <div className="mb-3 font-mono text-[11px] uppercase tracking-wide text-muted">
               Evidence · {evidence.length}
             </div>
-            <div className="grid gap-2.5 sm:grid-cols-2">
+            <div className="space-y-2.5">
               {evidence.map((ev, i) => (
                 <EvidenceCard key={ev.id ?? i} ev={ev} />
               ))}
@@ -128,32 +186,16 @@ export default function TrialPage({ params }: { params: { id: string } }) {
           </section>
         )}
 
-        {jury && !escalated && (
-          <section className="animate-fade-up">
-            <div className="mb-2 font-mono text-[11px] uppercase tracking-wide text-muted">Jury</div>
-            <div className="rounded-lg border border-line bg-white px-4 py-3 text-sm">
-              Consensus reached — <span className="font-medium">{jury.verdict}</span>
-              <span className="text-muted"> · {Math.round((jury.agreement ?? 0) * 100)}% agreement</span>
+        {verifySteps.length > 0 && (
+          <section>
+            <div className="mb-3 font-mono text-[11px] uppercase tracking-wide text-muted">
+              Verify · {verifySteps.length}
             </div>
-          </section>
-        )}
-
-        {escalated && (
-          <section className="space-y-4">
-            <div className="animate-fade-up rounded-lg border border-verdict-misleading/30 bg-verdict-misleading/5 px-4 py-3 text-sm font-medium text-verdict-misleading">
-              Jury split — case escalated to trial ⚖
-            </div>
-            <div className="space-y-3">
-              {args.map((a, i) => (
-                <ArgumentBubble key={i} side={a.side} round={a.round} text={a.text} />
+            <div className="space-y-2.5">
+              {verifySteps.map((entry, i) => (
+                <VerifyStepRow key={`${entry.step ?? "step"}-${i}`} entry={entry} />
               ))}
             </div>
-            {ruling && (
-              <div className="font-mono text-sm text-muted">
-                Ruling: {ruling.verdict} · {Math.round((ruling.confidence ?? 0) * 100)}%
-                {ruling.expedited ? " · expedited" : ""}
-              </div>
-            )}
           </section>
         )}
 

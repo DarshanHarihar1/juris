@@ -1,14 +1,13 @@
-"""S6 Synthesis (LLD §5-S6). Turns a decided result (consensus/trial/precedent) into the
-user-facing VerdictCard: a citation-locked explanation in the user's language, manipulation
-tags from a fixed taxonomy, and a ≤400-char forwardable rebuttal. Persists the verdicts row
-(confidence≥70 seeds the Phase-2 cache) and emits the final `verdict` event. v1: text card."""
+"""S6 Synthesis. Turns a decided verification result into the user-facing VerdictCard:
+a citation-locked explanation in the user's language, manipulation tags from a fixed
+taxonomy, and a <=400-char forwardable rebuttal. Persists the verdict row and emits the
+final `verdict` event."""
 import json
 import re
 
 from ..config import role
 from ..models import MANIPULATION_TAGS, EvidenceRef, SynthOutput, VerdictCard
 from ..services import citations, events, nim
-from .s4_fastpath import render_evidence
 
 REBUTTAL_MAX = 400
 
@@ -30,7 +29,7 @@ Return ONLY JSON:
 
 
 def rating_to_class(rating: str | None) -> str:
-    """Map a human fact-check's textual rating → 5-class verdict (precedent path)."""
+    """Map a human fact-check's textual rating to the local verdict classes."""
     r = (rating or "").lower()
     # check misleading/mixed first — "partly false", "half true" are MISLEADING, not FALSE/TRUE
     if any(w in r for w in ("misleading", "partly", "half", "mixture", "exagger", "out of context")):
@@ -47,16 +46,55 @@ def _slug(text: str, claim_id) -> str:
     return f"{base}-{str(claim_id)[:8]}"
 
 
-def _models_used(path: str) -> dict[str, str]:
-    used = {"synthesizer": role("synthesizer")["model"]}
-    if path == "consensus":
-        for i, m in enumerate(role("fastpath_jury"), 1):
-            used[f"juror_{i}"] = m
-    elif path == "trial":
-        used["prosecutor"] = role("prosecutor")["model"]
-        used["defense"] = role("defense")["model"]
-        used["judge"] = role("judge")["model"]
-    return used
+def _models_used(_path: str) -> dict[str, str]:
+    return {
+        "normalizer": role("normalizer")["model"],
+        "verifier": role("verifier")["model"],
+        "synthesizer": role("synthesizer")["model"],
+    }
+
+
+def _evidence_tag(ev: dict, index: int, used: set[str]) -> str:
+    raw = str(ev.get("id") or ev.get("evidence_id") or "").strip()
+    tag = raw if re.fullmatch(r"e\d+", raw) else f"e{index}"
+    if tag not in used:
+        return tag
+
+    suffix = index
+    while f"e{suffix}" in used:
+        suffix += 1
+    return f"e{suffix}"
+
+
+def render_evidence(evidence: list[dict]) -> tuple[str, dict[str, str]]:
+    """Render v2 evidence rows for the synthesizer prompt."""
+    if not evidence:
+        return "(no evidence found)", {}
+
+    lines: list[str] = []
+    idmap: dict[str, str] = {}
+    used: set[str] = set()
+    for i, ev in enumerate(evidence, 1):
+        tag = _evidence_tag(ev, i, used)
+        used.add(tag)
+        idmap[tag] = str(ev.get("id") or ev.get("evidence_id") or "")
+
+        text = (ev.get("content") or ev.get("snippet") or ev.get("summary") or "").strip()
+        if len(text) > 1200:
+            text = text[:1197].rstrip() + "..."
+
+        meta = [
+            ev.get("domain") or ev.get("source") or "",
+            f"credibility={ev.get('credibility')}" if ev.get("credibility") is not None else "",
+            f"date={ev.get('published_at')}" if ev.get("published_at") else "",
+        ]
+        meta_text = ", ".join(part for part in meta if part) or "source unknown"
+        title = ev.get("title") or ""
+        url = ev.get("url") or ""
+        stance = f" stance={ev.get('stance')}." if ev.get("stance") else ""
+        lines.append(f"[e:{tag}] {meta_text}.{stance} {title} {url}\n{text}".strip())
+
+    return "\n\n".join(lines), idmap
 
 
 def _enforce_rebuttal(text: str, fallback_url: str | None) -> str:
@@ -78,6 +116,7 @@ def build_card(claim_id, claim_en, claim_native, verdict, confidence, path,
     top = sorted(evidence, key=lambda e: e.get("credibility") or 0, reverse=True)
     ev_refs = [EvidenceRef(url=e["url"], domain=e.get("domain", ""), stance=e.get("stance"),
                            date=e.get("published_at")) for e in top[:5] if e.get("url")]
+    path = path or "verify"
     rebuttal = _enforce_rebuttal(out.rebuttal_card_native, ev_refs[0].url if ev_refs else None)
     return VerdictCard(
         slug=_slug(claim_en, claim_id), claim_native=claim_native, claim_en=claim_en,
@@ -88,8 +127,9 @@ def build_card(claim_id, claim_en, claim_native, verdict, confidence, path,
 
 
 async def synthesize(con, job_id, claim_id, *, claim_en, claim_native, lang,
-                     verdict, confidence, path, evidence: list[dict], original: str = "") -> VerdictCard:
-    await events.emit(job_id, "stage", {"stage": "S6_SYNTHESIZE", "status": "started", "claim_id": str(claim_id)})
+                     verdict, confidence, path="verify", evidence: list[dict], original: str = "") -> VerdictCard:
+    await events.emit(job_id, "stage", {"stage": "SYNTHESIZE", "status": "started", "claim_id": str(claim_id)})
+    path = path or "verify"
     evidence_text, _idmap = render_evidence(evidence)
     lang = lang or "en"
     user = (f'Original message: "{original or claim_en}"\nClaim: "{claim_en}"\n'
@@ -113,5 +153,5 @@ async def synthesize(con, job_id, claim_id, *, claim_en, claim_native, lang,
         claim_id, card.slug, verdict, confidence, json.dumps(card.model_dump()), path,
     )
     await events.emit(job_id, "verdict", {"claim_id": str(claim_id), **card.model_dump()})
-    await events.emit(job_id, "stage", {"stage": "S6_SYNTHESIZE", "status": "done", "claim_id": str(claim_id)})
+    await events.emit(job_id, "stage", {"stage": "SYNTHESIZE", "status": "done", "claim_id": str(claim_id)})
     return card

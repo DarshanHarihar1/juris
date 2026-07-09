@@ -42,8 +42,8 @@ export default function Home() {
         body: JSON.stringify({ type: mode, content }),
       });
       if (!r.ok) throw new Error(`Server responded ${r.status}`);
-      const { job_id } = await r.json();
-      router.push(`/trial/${job_id}`);
+      const { investigation_url, job_id } = await r.json();
+      router.push(investigation_url || `/investigation/${job_id}`);
     } catch (e: any) {
       setErr(e?.message ?? "Something went wrong. Try again.");
       setLoading(false);
@@ -62,8 +62,8 @@ export default function Home() {
             Is it true?
           </h1>
           <p className="mt-3 text-muted leading-relaxed">
-            Paste a claim or a forwarded message. Two investigators gather evidence, a jury
-            votes, and — if they disagree — it goes to trial. You get a cited verdict.
+            Paste a claim or a forwarded message. Juris runs a single iterative verifier
+            that searches, checks evidence, and returns a cited verdict.
           </p>
 
           <div className="mt-6">

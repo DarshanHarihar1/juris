@@ -1,79 +1,41 @@
 # Juris
 
-**Live, adversarial fact-checking for forwarded claims.** Paste a claim or a
-WhatsApp-style forward; two AI investigators gather cited evidence, a jury of
-independent models votes, and — if they disagree — the case goes to a live
-adversarial trial (prosecutor vs. defense, judged on an anonymized transcript).
-You get a citation-locked verdict, manipulation-technique tags, and a polite
-forwardable rebuttal, all served at a permalink.
+**Live fact-checking for forwarded claims.** Paste a claim or a WhatsApp-style
+forward; one iterative verifier gathers cited evidence, decides whether to
+search again or answer now, and returns a citation-locked verdict,
+manipulation-technique tags, and a polite forwardable rebuttal at a permalink.
 
 **Live:**
 - App: https://juris-eta.vercel.app
 - API: https://juris-web.onrender.com (`GET /health`)
 
-v1 scope: **text input only** (image/audio/URL intake deferred), text-rendered
-verdict cards (no PNG export), all models via the **NVIDIA NIM** free tier.
+Current scope: text, URL, and image intake; text-rendered verdict cards (no PNG
+export), all models via the **NVIDIA NIM** free tier.
 
 ---
 
-## How it works — the pipeline (S0→S6)
+## How it works
 
 ```
 POST /api/verify
       │
       ▼
- S0  Intake            trim/normalize raw text
-      │
+ A  Normalize          detect language, extract up to 3 check-worthy claims,
+      │                produce English pivot + native-language form, and assign
+      │                a temporal profile (`is_time_sensitive`, `as_of_date`,
+      │                `volatility`)
       ▼
- S1  Normalize         detect language (en / hi / hi-Latn), extract check-worthy
-      │                claims, strip opinions/greetings, split compound claims (≤3),
-      │                produce an English pivot + native-language form
+ B  Verify             one iterative tool-calling verifier per claim; each loop
+      │                chooses whether to `search`, `fetch_page`,
+      │                `factcheck_search`, or answer with `final_verdict`
+      │                while temporal validity is enforced in code
       ▼
- S2  Precedent         pgvector cosine search over the verified-claim cache
-      │                (confidence ≥ 70, similarity ≥ 0.92) → instant reuse
-      │                    │
-      │                    └─ no hit → rated human fact-check (Google Fact Check API),
-      │                       gated by embedding similarity ≥ 0.85 against THIS claim
-      │                       (guards against fuzzy keyword false-matches)
-      │                            │
-      │                            └─ no hit → continue
-      ▼
- S3  Investigate        Claim decomposed into ≤3 focused sub-questions. Two
-      │                 tool-using agents (different model families) answer each
-      │                 question in parallel: web_search/factcheck_search to find
-      │                 candidates, fetch_page to read actual page content, then
-      │                 a grounded answer + cited sources. Evidence rows carry
-      │                 question/answer/answerable instead of a stance label.
-      │                 Credibility is deterministic (domain table, never model-set).
-      ▼
- S4  Fast-path jury     3 jurors (different families) read the QA evidence log —
-      │                 answered sub-questions, not snippet strings. Each juror
-      │                 declares a PRIOR (own knowledge + confidence) before reading
-      │                 evidence, then arbitrates: evidence governs when it directly
-      │                 addresses the claim; a confident unanimous prior governs when
-      │                 evidence is thin; both weak → UNVERIFIABLE (1b gate).
-      │                 Confidence-weighted plurality ≥ 0.75 → consensus.
-      │                    │
-      │                    └─ jury splits → escalate
-      ▼                         │
- S6  Synthesize    ◄─────────── │
-      │                         ▼
-      │                    S5  Trial   prosecutor argues FALSE/MISLEADING, defense
-      │                         argues TRUE, 2 rebuttal rounds, each may run one extra
-      │                         search. Every factual sentence must carry an [e:id]
-      │                         citation or it's stripped. A judge (unused family)
-      │                         rules on an ANONYMIZED transcript ("Side 1"/"Side 2")
-      │                         → 5-class verdict. 90s budget → expedited ruling.
-      ▼
- VerdictCard: native-language one-liner + cited explanation, manipulation tags
- (9-item taxonomy), ≤400-char forwardable rebuttal, sources, models_used.
- Persisted to `verdicts`; confidence ≥ 70 seeds the S2 cache for future hits.
- Served at GET /api/verdicts/{slug} and streamed live via events_log.
+ C  Synthesize         build the user-facing VerdictCard, persist it, and
+                       deliver the permalink / WhatsApp reply
 ```
 
-Every stage emits an event row (`events_log`); the frontend subscribes via
-Supabase Realtime and renders the trial as it happens — evidence cards,
-jury result, escalation, argument bubbles, final verdict.
+The live frontend subscribes to `events_log` via Supabase Realtime and renders
+an investigation feed: claim, streamed evidence, verify steps, and final verdict.
 
 ---
 
@@ -102,18 +64,12 @@ becoming an echo chamber:
 | Role | Model(s) |
 |---|---|
 | Normalizer | `meta/llama-3.1-8b-instruct` |
-| Embeddings | `nvidia/nv-embedqa-e5-v5` (1024-dim) |
-| Investigators (×2, parallel) | `meta/llama-3.1-8b-instruct`, `nvidia/nvidia-nemotron-nano-9b-v2` |
-| Fast-path jury (×3) | `meta/llama-3.1-8b-instruct`, `deepseek-ai/deepseek-v4-flash`, `nvidia/nvidia-nemotron-nano-9b-v2` |
-| Prosecutor / Defense | `deepseek-ai/deepseek-v4-pro` / `openai/gpt-oss-120b` |
-| Judge | `moonshotai/kimi-k2-thinking` (family unused elsewhere, for impartiality) |
+| Verifier | `nvidia/nvidia-nemotron-nano-9b-v2` |
 | Synthesizer | `meta/llama-3.1-8b-instruct` |
+| OCR | `meta/llama-3.2-11b-vision-instruct` |
 
-Exact IDs are read from `config.yaml` at runtime — swappable without a code
-change. Small, fast tool-callers were chosen deliberately for investigators/
-jury/synthesizer after live testing showed heavier models (dense 70B+,
-`sarvam-m`) blew past request timeouts on the free tier; this cut end-to-end
-latency from several minutes to under 90s without hurting verdict quality.
+Exact IDs are read from `config.yaml` at runtime. The verifier is optimized for
+tool-calling and long-lived claim context rather than multi-model diversity.
 
 ---
 
@@ -127,17 +83,18 @@ backend/
     config.py / config.yaml   role→model matrix, thresholds
     models.py             Pydantic schemas (Submission, Claim, VerdictCard, ...)
     db.py                  asyncpg pool (Supabase pooler-safe)
-    pipeline/              s0_intake → s6_synthesize, orchestrator.py wires them
+    pipeline/              intake, normalize, verify, synthesize; orchestrator.py wires them
     services/              nim.py, search.py, tools.py, credibility.py, citations.py, jobs.py, events.py, whatsapp.py
     data/                  domains.yaml (credibility table), factcheckers.yaml (IFCN sites)
-  migrations/              0001 schema, 0002 RLS, 0003 frontend/Realtime, 0004 WhatsApp
-  tests/                   test_phase{0..5}.py — offline (mocked) + @needs_db/@needs_nim live tests
+  migrations/              0001 schema, 0002 RLS, 0003 frontend/Realtime, 0004 WhatsApp, 0006 v2 verdict/path widening
+  tests/                   v2-focused offline (mocked) + @needs_db live tests
 frontend/
   app/
     page.tsx               intake
-    trial/[id]/page.tsx    live courtroom (Supabase Realtime)
+    investigation/[id]/page.tsx    live investigation feed (Supabase Realtime)
+    trial/[id]/page.tsx            compatibility alias to investigation
     v/[slug]/page.tsx      SSR verdict permalink (SEO-crawlable)
-  components/               StageRail, EvidenceCard, ArgumentBubble, VerdictCardView, RebuttalCard
+  components/               StageRail, EvidenceCard, VerdictCardView, RebuttalCard
   lib/                      types, Supabase client, API config, citation renderer
 searxng/                   custom Dockerfile + settings.yml (JSON API, limiter off)
 design/                    phase-by-phase spec docs (design/phase-N-*.md) + HLD/LLD
@@ -185,7 +142,7 @@ Tests are organized per phase (`test_phase0.py` … `test_phase5.py`), mirroring
 |---|---|
 | `DATABASE_URL` | Supabase Postgres connection (session pooler; pool capped at 5 to stay under the free-tier 15-client limit) |
 | `NIM_API_KEY` | NVIDIA NIM auth |
-| `GOOGLE_FACTCHECK_API_KEY` | Google Fact Check Tools API (precedent search) |
+| `GOOGLE_FACTCHECK_API_KEY` | Google Fact Check Tools API (used by the verifier's `factcheck_search` tool) |
 | `SEARXNG_URL` | Internal URL of the SearXNG service (`web_search` tool) |
 
 **Frontend** (`frontend/.env.local` / Vercel project env):
@@ -206,8 +163,9 @@ Tests are organized per phase (`test_phase0.py` … `test_phase5.py`), mirroring
   stock image ignores env-var setting overrides and ships its API-blocking
   rate limiter on.
 - **Frontend** — Vercel, deployed via the Vercel CLI (`vercel deploy --prod`),
-  project `juris`. `/v/[slug]` is server-rendered for SEO; `/trial/[id]`
-  subscribes to Supabase Realtime with a 5s backfill poll for reconnects.
+  project `juris`. `/v/[slug]` is server-rendered for SEO; `/investigation/[id]`
+  subscribes to Supabase Realtime with a 5s backfill poll for reconnects. The
+  legacy `/trial/[id]` route remains as a compatibility alias.
 - **Database** — Supabase Postgres. Migrations in `backend/migrations/`,
   applied directly (no migration-runner service). RLS is on for every table;
   the backend uses the direct Postgres connection (bypasses RLS), while the
@@ -217,57 +175,30 @@ Tests are organized per phase (`test_phase0.py` … `test_phase5.py`), mirroring
 ```bash
 render logs --resources <service-id> --limit 200 -o text | grep juris.
 ```
-Every pipeline decision is logged under `juris.orchestrator` / `juris.s2` /
-etc. — claim normalization, each S2 precedent candidate with its similarity
-score and accept/reject reason, evidence counts, jury agreement, and the
-final verdict + path. This was essential for catching a real bug where
-Google Fact Check's fuzzy search matched an unrelated claim (fixed by adding
-the S2 semantic-similarity gate — see `design/phase-2-precedent-search.md`).
+Every pipeline decision is logged under `juris.*` — claim normalization,
+verify steps, evidence counts, tool usage, and the final verdict path.
 
 ---
 
-## Build phases
-
-Each phase is a vertical slice with its own goal, milestones, and testing
-criteria — see `design/phase-N-*.md` for the full spec. All are implemented,
-tested, and live-verified end-to-end.
-
-| # | Phase | Covers |
-|---|---|---|
-| 0 | [Foundation & Infra](design/phase-0-foundation.md) | Supabase schema, Render services, NIM client, config matrix, job queue, events plumbing |
-| 1 | [Intake & Normalize](design/phase-1-intake-normalize.md) | REST API, S0 text intake, S1 normalizer, orchestrator skeleton |
-| 2 | [Precedent & Search Tools](design/phase-2-precedent-search.md) | S2 cache + Google FactCheck + SearXNG, tool framework, credibility scorer |
-| 3 | [Investigation](design/phase-3-investigation.md) | S3 tool-using investigator agents (2), evidence log |
-| 4 | [Verdict Engine](design/phase-4-verdict-engine.md) | S4 fast-path jury + agreement, S5 trial, citation validator |
-| 5 | [Synthesis & Output](design/phase-5-synthesis-output.md) | S6 verdict card (text), rebuttal, manipulation tags, permalink |
-| 6 | [Live Courtroom UI](design/phase-6-frontend.md) | Next.js app, Supabase Realtime stream, courtroom view, permalink page |
-| 7 | [WhatsApp, Eval & Demo](design/phase-7-whatsapp-eval-demo.md) | Twilio WhatsApp adapter, golden-claim eval, `/stats`, demo video — **not started** |
-
-## Known v1 limitations
-- **Text only** — image/audio/URL submission returns `501` (`POST /api/media`).
-- **Cache doesn't re-translate** — if a cached verdict (English) is reused for
-  a same-meaning claim submitted in Hindi, the card is served as-is rather
-  than re-synthesized in the requester's language.
+## Current limitations
+- **Audio is still unsupported** — `POST /api/verify` returns `501` for `type="audio"`.
 - **No PNG export** — verdict cards are text-only (WhatsApp message + web page).
 - **Free-tier cold starts** — Render's free web services and SearXNG spin down
   after ~15 min idle; the first request after that takes ~30–60s.
 
 ## Research foundations
 
-The QA-decomposition pipeline is grounded in published work on retrieval-augmented
-fact-checking. Key references:
+The v2 single-verifier pipeline is grounded in published work on retrieval-augmented
+fact-checking, iterative retrieval, and temporal validity. Key references:
 
 | Paper | What we took from it |
 |---|---|
-| [RAGAR — RAG-Augmented Reasoning for Political Fact-Checking](https://arxiv.org/html/2404.12065v1) | CoRAG / ToRAG: decompose claim into sub-questions, answer each from retrieved evidence, derive verdict from answers — the core 3b pattern |
-| [PAVE — Arbitration Behavior over Prior-Context Discrepancy](https://arxiv.org/pdf/2606.01120) | Formalises the conflict between parametric (model) knowledge and retrieved evidence; defines the four knowledge-boundary categories and arbitration profiles used in the S4 juror prompt |
-| [SURE-RAG — Sufficiency and Uncertainty-Aware Evidence Verification](https://arxiv.org/pdf/2605.03534) | Evidence-sufficiency gating: abstain (UNVERIFIABLE) when retrieved evidence doesn't address the claim; basis of the S4 1b gate |
-| [Leveraging LLM Parametric Knowledge for Fact-Checking without Retrieval](https://arxiv.org/abs/2603.05471) | LLMs encode substantial factual knowledge; retrieval-only pipelines leave this unused and break on "obviously true" claims that have no fact-check articles |
-| [Insist when Know, Caution when Not Know](https://openreview.net/forum?id=VgEEl1UDlg) | LLMs naturally resist conflicting evidence when confident; basis for the prior-confidence arbitration rule in S4 jurors |
-| [Resolving Conflicting Evidence in Automated Fact-Checking (CONFACT, IJCAI-25)](https://arxiv.org/html/2505.17762v1) | Source-aware conflict resolution; notes RAG pipelines are especially vulnerable to injected misinformation in augmented context |
-| [SemanticCite — Citation Verification via Full-Text Analysis](https://arxiv.org/pdf/2511.16198) | "Reverse RAG" traceability: every claim must trace back to its source document; basis for grounding S3 answers in fetched page content rather than search snippets |
-| [OpenFactCheck — Unified Framework for LLM Factuality Evaluation](https://arxiv.org/pdf/2408.11832) | ~89–94 % of real-world claims are TRUE; professional fact-checkers don't write articles about true things — key insight explaining why retrieval-only pipelines fail on common-knowledge claims |
-| [Fact-Checking with LLMs via Probabilistic Certainty and Consistency](https://arxiv.org/html/2601.02574) | Certainty-gated retrieval: if model is decisive and self-consistent from parametric knowledge, skip retrieval (deferred to Phase 2 as 3a) |
+| [Loki / OpenFactVerification](https://arxiv.org/abs/2410.01794) | Simple linear pipeline, explicit check-worthiness filtering, and query reformulation around the underlying fact instead of the claim's wording |
+| [FIRE: Fact-checking with Iterative Retrieval and Verification](https://arxiv.org/abs/2411.00784) | Single agent deciding whether to answer now or search again; the core shape of the Verify loop |
+| [AVeriTeC shared task 2025](https://aclanthology.org/2025.fever-1.15/) | Competitive evidence that simple single-agent / RAG fact-checking pipelines outperform heavyweight multi-agent debates |
+| [Temporal failure modes in statutory QA](https://arxiv.org/abs/2605.23497) | Hard temporal filtering by as-of date matters more than prompt hints for time-sensitive claims |
+| [SemanticCite](https://arxiv.org/abs/2511.16198) | Verdicts should be grounded in fetched page content, not snippets alone |
+| [OpenFactCheck](https://arxiv.org/abs/2408.11832) | Retrieval silence on static claims is weak evidence, supporting the constrained parametric fallback for non-time-sensitive facts |
 
 ## Global conventions
 - **Models:** all via NVIDIA NIM (`https://integrate.api.nvidia.com/v1`,

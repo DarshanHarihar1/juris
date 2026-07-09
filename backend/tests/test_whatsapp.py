@@ -38,7 +38,7 @@ def test_format_verdict_strips_citations_and_links_permalink(monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://juris.example")
     msg = whatsapp.format_verdict([{
         "verdict": "FALSE", "one_liner_native": "Lemon water does not cure cancer.",
-        "explanation_native": "No trial supports it [e:e1]. Doctors disagree [e:e2].", "slug": "lemon-abcd1234"}])
+        "explanation_native": "No evidence supports it [e:e1]. Doctors disagree [e:e2].", "slug": "lemon-abcd1234"}])
     assert "❌ FALSE" in msg
     assert "[e:" not in msg                                   # citation tags stripped for chat
     assert "https://juris.example/v/lemon-abcd1234" in msg

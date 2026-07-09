@@ -1,10 +1,9 @@
-"""Pydantic schemas (LLD §4). Phase 1 covers Submission, Claim, and the
-structured I/O for the S1 normalizer. Evidence/Trial/Verdict land in later phases."""
+"""Pydantic schemas for the v2 pipeline."""
 from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel
-from typing import Literal, Optional
+from typing import Literal
 
 ClaimType = Literal["factual", "numeric", "media_context", "quote", "opinion_skip"]
 
@@ -28,7 +27,7 @@ class Claim(BaseModel):
     text_norm: str                      # self-contained, English pivot
     text_norm_native: str               # same claim in source language
     claim_type: ClaimType
-    # embedding filled in Phase 2; omitted here.
+    # embeddings were removed from the v2 runtime path.
 
 
 # --- S1 normalizer structured output (LLD §5-S1) --------------------------------
@@ -38,6 +37,7 @@ class NormalizedClaim(BaseModel):
     claim_type: ClaimType
     is_time_sensitive: bool = False
     as_of_date: str | None = None
+    volatility: Literal["static", "slow", "breaking"] = "slow"
     checkworthiness_score: float = 1.0
 
 
@@ -46,36 +46,9 @@ class NormalizerOutput(BaseModel):
     claims: list[NormalizedClaim]       # opinions/greetings already dropped; ≤3 atomic
 
 
-# --- S4/S5 verdict engine (LLD §4.4, §5-S4/S5) ----------------------------------
-VerdictClass = Literal["TRUE", "FALSE", "MISLEADING", "UNVERIFIABLE", "CONFLICTING"]
+VerdictClass = Literal["TRUE", "FALSE", "MOSTLY_TRUE", "MISLEADING", "UNVERIFIABLE", "CONFLICTING"]
 
 
-class JurorVote(BaseModel):
-    """One fast-path juror reading claim + QA evidence log (no browsing)."""
-    verdict: VerdictClass
-    confidence: float                   # 0–1
-    key_evidence_ids: list[str] = []    # evidence tags (e1, e2, …) the vote leans on
-    reasoning_short: str = ""
-    prior_verdict: Optional[VerdictClass] = None   # juror's belief before reading evidence
-    prior_confidence: float = 0.0                  # 0–1; 0 = juror didn't report a prior
-    evidence_addresses_claim: bool = True          # False → evidence too thin to judge (1b gate)
-
-
-class Argument(BaseModel):
-    """One prosecutor/defense turn. Factual sentences must carry [e:id] citations."""
-    text: str
-    search_query: str | None = None     # optional single extra targeted search this side wants
-
-
-class Ruling(BaseModel):
-    """The Judge's verdict over an anonymized transcript + evidence log."""
-    verdict: VerdictClass
-    confidence: float                   # 0–1
-    decisive_evidence_ids: list[str] = []
-    reasoning: str = ""
-
-
-# --- S6 synthesis / VerdictCard (LLD §4.5, §5-S6) -------------------------------
 MANIPULATION_TAGS = frozenset({
     "fake-urgency", "authority-impersonation", "old-media-new-context",
     "numeric-truth-effect", "fabricated-quote", "emotional-priming",
@@ -98,38 +71,13 @@ class SynthOutput(BaseModel):
     rebuttal_card_native: str
 
 
-# --- S3 QA-decomposition models (Phase 3b) ---
-
-class ClaimQuestions(BaseModel):
-    """Decomposer output: sub-questions whose answers together verify/refute the claim."""
-    questions: list[str]
-    time_sensitive: bool = False        # True → investigators use recency filters
-
-
-class QueryBundle(BaseModel):
-    """Generated search queries for a claim-question pair."""
-    queries: list[str]
-
-
-class EvidenceRelevance(BaseModel):
-    """Relevance/stance label for a candidate evidence row."""
-    label: Literal["supports", "refutes", "irrelevant"]
-
-
-class QASource(BaseModel):
-    """A source URL the investigator fetched to answer a question."""
-    url: str
-    title: str = ""
-    snippet: str = ""
-    published_at: str | None = None
-
-
-class QuestionAnswer(BaseModel):
-    """One investigator's grounded answer to one sub-question."""
-    question: str
-    answer: str = ""
-    answerable: bool = True             # False → no fetched page directly answered this
-    sources: list[QASource] = []
+class Verdict(BaseModel):
+    verdict: VerdictClass
+    confidence: int
+    explanation: str
+    key_evidence: list[str] = []
+    evidence_conflict: Literal["none", "resolved_by_recency", "unresolved"] = "none"
+    used_parametric_knowledge: bool = False
 
 
 class VerdictCard(BaseModel):
@@ -143,5 +91,5 @@ class VerdictCard(BaseModel):
     manipulation_tags: list[str]
     evidence: list[EvidenceRef]
     rebuttal_card_native: str
-    path: Literal["cache", "precedent", "consensus", "trial"]
+    path: Literal["verify"]
     models_used: dict[str, str]         # role → model id (transparency + NIM showcase)

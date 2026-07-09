@@ -1,7 +1,16 @@
 """Tool registry (LLD §2). Maps tool-name → (OpenAI tool-calling JSON schema,
-async Python fn). Built in Phase 2; Phase 3 investigators call schemas()/call_tool().
-numeric_check / source deeper tools are deferred (LLD §0)."""
+async Python fn). Existing v1 tools remain available; v2 Verify adds search()
+and final_verdict()."""
+from ..models import Verdict
 from . import credibility, search
+
+
+async def _search(query: str, time_range: str | None = None, claim=None,
+                  evidence_seq_start: int = 1) -> list[dict]:
+    if claim is None:
+        return await search.web_search(query, recency=time_range)
+    return await search.search(query, time_range=time_range, claim=claim,
+                               evidence_seq_start=evidence_seq_start)
 
 
 async def _web_search(query: str, recency: str | None = None) -> list[dict]:
@@ -20,7 +29,23 @@ async def _fetch_page(url: str) -> dict:
     return await search.fetch_page(url)
 
 
+async def _final_verdict(**kwargs) -> dict:
+    return kwargs
+
+
 REGISTRY: dict[str, dict] = {
+    "search": {
+        "fn": _search,
+        "schema": {"type": "function", "function": {
+            "name": "search",
+            "description": "v2 merged web/news search. Returns credibility-scored evidence rows; top results include fetched page content.",
+            "parameters": {"type": "object", "properties": {
+                "query": {"type": "string", "description": "Search query for the underlying fact, not the raw claim text."},
+                "time_range": {"type": "string", "enum": ["day", "week", "month", "year"],
+                               "description": "Optional SearXNG time filter for recent/time-sensitive claims."},
+            }, "required": ["query"]},
+        }},
+    },
     "web_search": {
         "fn": _web_search,
         "schema": {"type": "function", "function": {
@@ -61,6 +86,14 @@ REGISTRY: dict[str, dict] = {
             "parameters": {"type": "object", "properties": {
                 "url": {"type": "string", "description": "Full URL to fetch"},
             }, "required": ["url"]},
+        }},
+    },
+    "final_verdict": {
+        "fn": _final_verdict,
+        "schema": {"type": "function", "function": {
+            "name": "final_verdict",
+            "description": "Submit the final claim verdict. Every factual sentence in explanation must cite evidence as [e:e1].",
+            "parameters": Verdict.model_json_schema(),
         }},
     },
 }

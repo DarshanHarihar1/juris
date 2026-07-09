@@ -67,8 +67,8 @@ async def test_migration_roundtrip():
     try:
         tables = {r["tablename"] for r in await con.fetch(
             "select tablename from pg_tables where schemaname = 'public'")}
-        assert {"submissions", "claims", "evidence", "trials",
-                "verdicts", "events_log", "jobs"} <= tables
+        assert {"submissions", "claims", "evidence", "verdicts", "events_log", "jobs"} <= tables
+        assert "trials" not in tables
         idx = await con.fetchval(
             "select indexdef from pg_indexes where indexname = 'claims_embedding_ivfflat'")
         assert idx and "ivfflat" in idx

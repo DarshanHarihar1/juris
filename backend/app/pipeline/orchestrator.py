@@ -1,13 +1,14 @@
-"""Stage machine (LLD §3.2 event protocol). Full pipeline S0→S6:
-intake → normalize → persist+embed claims → precedent short-circuit (cache/human
-fact-check) → on a miss, parallel investigation → fast-path jury or adversarial trial →
-synthesis into the user-facing VerdictCard. Zero-claim guard ends the job."""
+"""v2 stage machine: intake -> normalize -> verify -> synthesize.
+
+One verifier agent runs per normalized claim. Claims within a submission execute
+concurrently, while each claim keeps a single decision-making context.
+"""
+import asyncio
 import logging
 
 from ..db import pool
-from ..services import credibility, events, nim, whatsapp
-from . import (s0_intake, s1_normalize, s2_precedent, s3_investigate, s4_fastpath,
-               s5_trial, s6_synthesize)
+from ..services import events, whatsapp
+from . import s0_intake, s1_normalize, s6_synthesize, verify
 
 log = logging.getLogger("juris.orchestrator")
 
@@ -15,6 +16,53 @@ log = logging.getLogger("juris.orchestrator")
 def _wa(sub) -> bool:
     """True when this job arrived over WhatsApp and still has a reply address to push to."""
     return sub["channel"] == "whatsapp" and bool(sub["reply_to"])
+
+
+async def _run_claim(job_id, submission_id, original_text: str, normalized_claim, detected_lang: str) -> None:
+    async with (await pool()).acquire() as con:
+        claim_id = await con.fetchval(
+            """insert into claims (submission_id, text_original, text_norm, text_norm_native, claim_type)
+               values ($1, $2, $3, $4, $5) returning id""",
+            submission_id,
+            original_text,
+            normalized_claim.text_norm,
+            normalized_claim.text_norm_native,
+            normalized_claim.claim_type,
+        )
+
+    await events.emit(job_id, "claim", {
+        "claim_id": str(claim_id),
+        "text_norm": normalized_claim.text_norm,
+        "text_norm_native": normalized_claim.text_norm_native,
+        "claim_type": normalized_claim.claim_type,
+        "volatility": normalized_claim.volatility,
+        "as_of_date": normalized_claim.as_of_date,
+    })
+    log.info("job=%s claim=%s norm=%r type=%s", job_id, claim_id, normalized_claim.text_norm, normalized_claim.claim_type)
+
+    verdict, evidence = await verify.verify_with_evidence(
+        job_id,
+        normalized_claim,
+        claim_id=claim_id,
+        lang=detected_lang,
+    )
+    log.info("job=%s claim=%s VERDICT %s conf=%s path=verify",
+             job_id, claim_id, verdict.verdict, verdict.confidence)
+
+    async with (await pool()).acquire() as con:
+        await s6_synthesize.synthesize(
+            con,
+            job_id,
+            claim_id,
+            claim_en=normalized_claim.text_norm,
+            claim_native=normalized_claim.text_norm_native,
+            lang=detected_lang,
+            verdict=verdict.verdict,
+            confidence=verdict.confidence,
+            path="verify",
+            evidence=evidence,
+            original=original_text,
+        )
 
 
 async def run(job: dict) -> None:
@@ -32,10 +80,9 @@ async def run(job: dict) -> None:
         raise ValueError(f"submission {submission_id} not found")
 
     # S0 — intake: resolve text / url / image down to plain text for S1.
-    await events.emit(job_id, "stage", {"stage": "S0_INTAKE", "status": "started",
-                                        "media_type": sub["media_type"]})
+    await events.emit(job_id, "stage", {"stage": "INTAKE", "status": "started", "media_type": sub["media_type"]})
     text = await s0_intake.intake(sub["media_type"], sub["raw_text"], sub["media_uri"])
-    await events.emit(job_id, "stage", {"stage": "S0_INTAKE", "status": "done"})
+    await events.emit(job_id, "stage", {"stage": "INTAKE", "status": "done"})
 
     # url fetch / OCR yielded nothing → terminal (mirrors the zero-claim guard below).
     if not text:
@@ -47,9 +94,9 @@ async def run(job: dict) -> None:
         return
 
     # S1 — normalize & decompose
-    await events.emit(job_id, "stage", {"stage": "S1_NORMALIZE", "status": "started"})
+    await events.emit(job_id, "stage", {"stage": "NORMALIZE", "status": "started"})
     norm = await s1_normalize.normalize(text, sub["detected_lang"])
-    await events.emit(job_id, "stage", {"stage": "S1_NORMALIZE", "status": "done", "lang": norm.detected_lang})
+    await events.emit(job_id, "stage", {"stage": "NORMALIZE", "status": "done", "lang": norm.detected_lang})
 
     async with (await pool()).acquire() as con:
         await con.execute("update submissions set detected_lang = $2 where id = $1", submission_id, norm.detected_lang)
@@ -62,64 +109,10 @@ async def run(job: dict) -> None:
                 await whatsapp.deliver_text(con, submission_id, sub["reply_to"], msg)
             return
 
-        embeddings = await nim.embed([nc.text_norm for nc in norm.claims])
-        for nc, emb in zip(norm.claims, embeddings):
-            claim_id = await con.fetchval(
-                """insert into claims (submission_id, text_original, text_norm, text_norm_native, claim_type, embedding)
-                   values ($1, $2, $3, $4, $5, $6::vector) returning id""",
-                submission_id, text, nc.text_norm, nc.text_norm_native, nc.claim_type, s2_precedent.vec(emb),
-            )
-            await events.emit(job_id, "claim", {
-                "claim_id": str(claim_id), "text_norm": nc.text_norm, "claim_type": nc.claim_type,
-            })
-            log.info("job=%s claim=%s norm=%r type=%s", job_id, claim_id, nc.text_norm, nc.claim_type)
-
-            # S2 — precedent short-circuit (cache / human fact-check)
-            await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "started"})
-            sc = await s2_precedent.check(con, claim_id, emb, nc.text_norm)
-            if sc and sc["path"] == "precedent":
-                fc = sc["fact_check"]
-                await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "done",
-                                                    "claim_id": str(claim_id), "hit": "precedent"})
-                log.info("job=%s claim=%s -> precedent %s (sim=%.3f) %s", job_id, claim_id,
-                         s6_synthesize.rating_to_class(fc.get("rating")), sc.get("similarity", 0.0), fc.get("url"))
-                ev = [{"url": fc["url"], "domain": fc["domain"], "title": fc.get("title"),
-                       "snippet": fc.get("claim") or fc.get("rating"), "stance": "refutes",
-                       "credibility": credibility.score(fc["domain"]), "published_at": fc.get("published_at")}]
-                await s6_synthesize.synthesize(
-                    con, job_id, claim_id, claim_en=nc.text_norm, claim_native=nc.text_norm_native,
-                    lang=norm.detected_lang, verdict=s6_synthesize.rating_to_class(fc.get("rating")),
-                    confidence=80, path="precedent", evidence=ev, original=text)
-                continue
-            await events.emit(job_id, "stage", {"stage": "S2_PRECEDENT", "status": "miss",
-                                                "claim_id": str(claim_id)})
-
-            # S3 — parallel investigation gathers a cited evidence log for the miss.
-            evidence = await s3_investigate.investigate(
-                con, job_id, claim_id, nc.text_norm, nc.text_norm_native,
-                is_time_sensitive=nc.is_time_sensitive,
-                as_of_date=nc.as_of_date,
-            )
-            log.info("job=%s claim=%s S2 miss -> S3 gathered %d evidence rows", job_id, claim_id, len(evidence))
-
-            # S4 — fast-path jury; consensus resolves cheaply, otherwise escalate to trial.
-            result = await s4_fastpath.deliberate(
-                job_id, claim_id, nc.text_norm, evidence,
-                is_time_sensitive=nc.is_time_sensitive,
-                as_of_date=nc.as_of_date,
-            )
-            if result is None:
-                log.info("job=%s claim=%s jury split -> S5 trial", job_id, claim_id)
-                await events.emit(job_id, "escalation", {"claim_id": str(claim_id)})
-                result = await s5_trial.run(con, job_id, claim_id, nc.text_norm, evidence)   # S5 trial
-
-            log.info("job=%s claim=%s VERDICT %s conf=%s path=%s",
-                     job_id, claim_id, result["verdict"], result["confidence"], result["path"])
-            # S6 — synthesize the user-facing VerdictCard, persist it, seed the cache.
-            await s6_synthesize.synthesize(
-                con, job_id, claim_id, claim_en=nc.text_norm, claim_native=nc.text_norm_native,
-                lang=norm.detected_lang, verdict=result["verdict"], confidence=result["confidence"],
-                path=result["path"], evidence=evidence, original=text)
+        await asyncio.gather(*[
+            _run_claim(job_id, submission_id, text, nc, norm.detected_lang)
+            for nc in norm.claims
+        ])
 
         # All claims decided — push the verdict card(s) back over WhatsApp and clear reply_to.
         if _wa(sub):

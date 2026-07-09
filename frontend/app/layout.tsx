@@ -7,7 +7,7 @@ const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono", displ
 
 export const metadata: Metadata = {
   title: "Juris — live fact-checking",
-  description: "Paste a claim or forwarded message. Watch the trial unfold. Get a cited verdict.",
+  description: "Paste a claim or forwarded message. Watch the live investigation unfold and get a cited verdict.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -4,20 +4,15 @@ type Status = "started" | "done" | undefined;
 
 export function StageRail({
   stageStatus,
-  escalated,
   finished,
 }: {
   stageStatus: Record<string, Status>;
-  escalated: boolean;
   finished?: boolean;
 }) {
-  // Hide the trial stage unless the case actually escalated.
-  const stages = STAGES.filter((s) => s !== "S5_TRIAL" || escalated);
   return (
     <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
-      {stages.map((s) => {
-        // Once a verdict lands, never leave a stage "blinking" (e.g. cache hit skips
-        // emitting S2 done) — treat any lingering "started" as done.
+      {STAGES.map((s) => {
+        // Once a verdict lands, never leave a stage blinking if its done event was missed.
         const raw = stageStatus[s];
         const st: Status = finished && raw === "started" ? "done" : raw;
         const dot =

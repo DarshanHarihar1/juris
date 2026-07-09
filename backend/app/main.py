@@ -71,12 +71,12 @@ async def verify(body: VerifyBody):
             body.type, raw_text, media_uri,
         )
     job_id = await jobs.enqueue(submission_id=submission_id)
-    return {"job_id": str(job_id), "trial_url": f"/trial/{job_id}", "status": "queued"}
+    return {"job_id": str(job_id), "investigation_url": f"/investigation/{job_id}", "status": "queued"}
 
 
 @app.get("/api/jobs/{job_id}/events")
 async def job_events(job_id: str):
-    """Ordered event log for a job. ponytail: plain JSON poll; the live courtroom
+    """Ordered event log for a job. ponytail: plain JSON poll; the live investigation
     UI subscribes to events_log directly via Supabase Realtime (LLD §3.2)."""
     async with (await db.pool()).acquire() as con:
         rows = await con.fetch(
@@ -134,12 +134,12 @@ async def whatsapp_webhook(request: Request):
                 await con.execute(
                     "insert into wa_inbound (message_sid, job_id) values ($1, $2)", msg.msg_sid, job_id)
 
-    trial_url = f"{config.public_base_url()}/trial/{job_id}"
+    investigation_url = f"{config.public_base_url()}/investigation/{job_id}"
     return Response(
-        whatsapp.ack_twiml(f"🔍 Juris is investigating — watch the live trial: {trial_url}"),
+        whatsapp.ack_twiml(f"🔍 Juris is investigating — follow the live investigation: {investigation_url}"),
         media_type="application/xml")
 
 
 @app.post("/api/media")
 async def media():
-    raise HTTPException(501, "media upload not supported yet (v1 text-only)")
+    raise HTTPException(501, "direct media upload not supported yet")

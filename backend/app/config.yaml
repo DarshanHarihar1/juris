@@ -1,35 +1,20 @@
 # config.yaml — role→model matrix + thresholds. All models via NVIDIA NIM.
 # IDs are real NIM catalog IDs; re-pin from build.nvidia.com/models at build time.
 roles:
-  embeddings:   { model: nvidia/nv-embedqa-e5-v5, dims: 1024 }  # 1024-dim; baai/bge-m3 500s on NIM. We embed the English text_norm pivot, so English-centric is fine.
   normalizer:   { model: meta/llama-3.1-8b-instruct, temp: 0.0 }
-  decomposer:   { model: meta/llama-3.1-8b-instruct, temp: 0.0 }  # S3 QA: breaks claim into sub-questions
-  query_generator: { model: meta/llama-3.1-8b-instruct, temp: 0.0 }
-  investigators:                       # 2 DIFFERENT families, answer sub-questions in parallel.
-    # fetch_page added for QA-mode: investigators now read real page content, not just search snippets.
-    - { model: meta/llama-3.1-8b-instruct,        tools: [web_search, factcheck_search, fetch_page] }
-    - { model: nvidia/nvidia-nemotron-nano-9b-v2, tools: [web_search, factcheck_search, fetch_page] }
-  fastpath_jury:                       # 3 independent verdict voters, different families.
-    # Fast small voters (jurors don't browse, just read evidence): the dense 70B/49B ran
-    # ~2min; these keep 3-family diversity (Meta / DeepSeek / NVIDIA) at a fraction of the latency.
-    [ meta/llama-3.1-8b-instruct, deepseek-ai/deepseek-v4-flash, nvidia/nvidia-nemotron-nano-9b-v2 ]
-  prosecutor:   { model: deepseek-ai/deepseek-v4-pro,   temp: 0.7 }
-  defense:      { model: openai/gpt-oss-120b,           temp: 0.7 }
-  judge:        { model: moonshotai/kimi-k2-thinking,   temp: 0.1 }
-  # sarvamai/sarvam-m (Indic-native) timed out on NIM → empty cards. llama-3.1-8b is
-  # reliable and multilingual enough; revisit an Indic model if Hindi quality falls short.
-  synthesizer:  { model: meta/llama-3.1-8b-instruct,    temp: 0.2 }
-  ocr:          { model: meta/llama-3.2-11b-vision-instruct }  # S0 image→text; re-pin from NIM vision catalog. 11b is fast enough for transcription.
+  verifier:     { model: nvidia/nvidia-nemotron-nano-9b-v2, temp: 0.1 }
+  synthesizer:  { model: meta/llama-3.1-8b-instruct, temp: 0.2 }
+  ocr:          { model: meta/llama-3.2-11b-vision-instruct }
 provider:
-  base_url: https://integrate.api.nvidia.com/v1        # OpenAI-compatible
+  base_url: https://integrate.api.nvidia.com/v1
   auth_env: NIM_API_KEY
   fallback_model: meta/llama-3.1-8b-instruct
-  rate_limit: 40                       # req/min, free-tier ceiling → global semaphore
+  rate_limit: 40
 thresholds:
-  agreement_theta: 0.75
-  precedent_similarity: 0.85           # min claim↔fact-check similarity to trust a human debunk
-  max_rebuttal_rounds: 2
-  max_tool_calls_per_investigator: 3
-  max_questions: 3                     # S3 QA: max sub-questions to decompose per claim
-  prior_confidence_floor: 0.6         # S4 1b gate: unanimous low prior + unanswerable evidence → UNVERIFIABLE
+  max_verify_steps: 6
+  verify_budget_s: 75
+  max_autofetch: 2
+  max_results: 6
+  fetch_truncate_chars: 3000
+  temporal_slack_days: 3
   checkworthy_floor: 0.6

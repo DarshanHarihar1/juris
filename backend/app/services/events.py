@@ -1,5 +1,4 @@
-"""Writes rows to events_log. Frontend subscribes via Supabase Realtime (LLD §3.2).
-Every pipeline stage calls emit() to stream progress to the live courtroom UI."""
+"""Writes rows to events_log for the live investigation feed."""
 import json
 from uuid import UUID
 

@@ -14,7 +14,7 @@ def cfg() -> dict:
 
 
 def role(name: str) -> dict | list:
-    """Resolve a role entry from config.yaml (e.g. 'normalizer', 'investigators')."""
+    """Resolve a role entry from config.yaml (e.g. 'normalizer', 'verifier')."""
     return cfg()["roles"][name]
 
 
@@ -41,6 +41,6 @@ def database_url() -> str:
 
 
 def public_base_url() -> str:
-    """Absolute origin of the frontend — used to build clickable trial/verdict links
+    """Absolute origin of the frontend — used to build clickable investigation/verdict links
     for WhatsApp (relative paths aren't tappable in a chat)."""
     return os.environ.get("PUBLIC_BASE_URL", "https://juris-eta.vercel.app").rstrip("/")

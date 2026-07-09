@@ -21,12 +21,16 @@ Rules:
    - text_norm_native: the same claim in the message's original language (identical to text_norm when the message is English).
 4. Classify claim_type as one of: "factual", "numeric" (quantities/stats/dates), "media_context" (a photo/video presented out of context), "quote" (words attributed to someone). Do not use "opinion_skip" — just omit opinions entirely.
 5. Set is_time_sensitive=true when the claim depends on current office-holders, current prices, election outcomes, rankings, or any fact that can change over time. Otherwise false.
-6. Set checkworthiness_score to a number from 0.0 to 1.0. Clear, factual, independently verifiable claims should score high. Vague, opinion-adjacent, or weakly factual claims should score low.
-7. If is_time_sensitive=true, set as_of_date to today's date in YYYY-MM-DD form. Otherwise null.
-8. Split a compound message into separate atomic claims. Emit AT MOST 3.
-9. If there are no check-worthy factual claims, return an empty claims list.
+6. Set as_of_date to the date the claim is anchored to, if stated or implied ("as of today", "in the 2024 budget", "yesterday"). If is_time_sensitive=true and no anchor is stated, set as_of_date to today's date in YYYY-MM-DD form. Otherwise null.
+7. Set volatility to exactly one of:
+   - "static" for facts whose truth cannot change (historical facts, science, geography).
+   - "slow" for facts that change over months/years (officeholders, populations, laws).
+   - "breaking" for facts that change over hours/days (ongoing events, disasters, sports, markets).
+8. Set checkworthiness_score to a number from 0.0 to 1.0. Clear, factual, independently verifiable claims should score high. Vague, opinion-adjacent, or weakly factual claims should score low.
+9. Split a compound message into separate atomic claims. Emit AT MOST 3.
+10. If there are no check-worthy factual claims, return an empty claims list.
 
-Return ONLY JSON: {{"detected_lang": string, "claims": [{{"text_norm": string, "text_norm_native": string, "claim_type": string, "is_time_sensitive": boolean, "as_of_date": string|null, "checkworthiness_score": number}}]}}"""
+Return ONLY JSON: {{"detected_lang": string, "claims": [{{"text_norm": string, "text_norm_native": string, "claim_type": string, "is_time_sensitive": boolean, "as_of_date": string|null, "volatility": "static"|"slow"|"breaking", "checkworthiness_score": number}}]}}"""
 
 
 async def normalize(text: str, lang_hint: str | None = None) -> NormalizerOutput:
