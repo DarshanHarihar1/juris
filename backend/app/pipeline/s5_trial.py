@@ -26,6 +26,9 @@ Return ONLY JSON: {"text": "...", "search_query": null}"""
 JUDGE_SYSTEM = """You are the JUDGE. Two anonymous sides argued about a claim. Read the
 transcript and evidence log and rule impartially — do NOT assume which side is correct.
 verdict ∈ TRUE | FALSE | MISLEADING | UNVERIFIABLE | CONFLICTING.
+When evidence shows "(no direct answer found)" or "(no evidence found)", use your own
+training knowledge to reach a verdict if you know the answer confidently. Only return
+UNVERIFIABLE when you cannot determine the truth from evidence or your own knowledge.
 Return ONLY JSON: {"verdict":"...","confidence":0.0,"decisive_evidence_ids":["e1"],"reasoning":"..."}"""
 
 

@@ -172,10 +172,17 @@ async def deliberate(
 
     # 1b gate: if ALL jurors say evidence doesn't address the claim AND priors are weak →
     # return UNVERIFIABLE rather than emitting a confident verdict built on noise.
+    # Exception: for time-sensitive claims, escalate to S5 trial where the stronger judge
+    # model (kimi-k2-thinking) can use its training knowledge to reach a verdict.
     floor = thresholds().get("prior_confidence_floor", 0.6)
     all_unanswerable = all(not v.evidence_addresses_claim for v in votes)
     avg_prior_conf = sum(v.prior_confidence for v in votes) / len(votes)
     if all_unanswerable and avg_prior_conf < floor:
+        if is_time_sensitive:
+            await events.emit(job_id, "stage", {"stage": "S4_FASTPATH", "status": "done",
+                                                "claim_id": str(claim_id), "agreement": 0.0,
+                                                "verdict": None})
+            return None  # escalate to S5 trial
         await events.emit(job_id, "stage", {"stage": "S4_FASTPATH", "status": "done",
                                             "claim_id": str(claim_id), "agreement": 1.0,
                                             "verdict": "UNVERIFIABLE"})

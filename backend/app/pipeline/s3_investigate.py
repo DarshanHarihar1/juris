@@ -427,7 +427,37 @@ async def investigate(
     for qa, found_by in all_answers:
         merged += _to_evidence_rows(qa, found_by)
 
-    # If investigators found nothing, add unanswerable placeholder so S4 can apply 1b gate
+    # Seed direct injection: 8B investigators often ignore the SEED SHORTCUT prompt rule and
+    # return answerable=false even when a seed snippet directly states the answer. For
+    # time-sensitive claims, bypass investigator judgment and inject seed results as evidence
+    # rows directly so S4 jurors can evaluate the actual snippets.
+    if decomposed.time_sensitive:
+        answered_qs = {row["question"] for row in merged if row.get("answerable") and row.get("url")}
+        for q in questions:
+            if q in answered_qs:
+                continue
+            for query in (query_plan.get(q) or [q])[:2]:
+                seed_hits = await search.web_search(query, recency="week")
+                if not seed_hits:
+                    seed_hits = await search.web_search(query, recency="month")
+                for r in seed_hits[:2]:
+                    url = search.canonical_url((r.get("url") or "").strip())
+                    if not url:
+                        continue
+                    dom = _domain(url)
+                    if dom in _HALLUCINATED_DOMAINS or any(p in url for p in _SERP_PREFIXES):
+                        continue
+                    merged.append({
+                        "url": url, "domain": dom,
+                        "title": r.get("title") or "", "snippet": r.get("snippet") or "",
+                        "published_at": r.get("published_at"),
+                        "stance": None, "credibility": credibility.score(dom),
+                        "found_by": "seed_direct",
+                        "question": q, "answer": r.get("snippet") or "",
+                        "answerable": bool(r.get("snippet")),
+                    })
+
+    # If investigators and seed injection found nothing, add unanswerable placeholder so S4 can apply 1b gate
     if not merged:
         for q in questions:
             merged.append({
