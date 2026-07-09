@@ -42,12 +42,17 @@ Today's date: {today}.
 Rules:
 - Use web_search or factcheck_search to find relevant pages.
 - For time-sensitive questions you MUST include recency="week" in your first web_search call.
+- SEED SHORTCUT: If "Seed search results" are provided above AND a snippet there EXPLICITLY
+  states the answer (e.g. "India wins T20 World Cup 2026", "SKY led India to title"), answer
+  directly from that snippet — set answerable=true and include the seed URL as your source.
+  Seed results come from recency=week searches and are already verified-recent; skip the
+  pre-2025 staleness check for them. Only use fetch_page when the snippet is ambiguous.
 - Use fetch_page on the 1–2 most relevant URLs to read what those pages actually say.
-- Base your answer ONLY on what the fetched pages contain — not your own knowledge.
+- Base your answer on fetched pages or (per the SEED SHORTCUT above) clear seed snippets.
 - Include in "sources" every URL you actually fetched or found via search.
 - IMPORTANT: If the fetched page was published before 2025 and asks about a current fact
   (who holds office now, current prices, etc.) the page is STALE — set answerable to false.
-- If no fetched page directly answers the question with current information, set answerable to false.
+- If no fetched page or seed snippet directly answers the question, set answerable to false.
 - You may call tools AT MOST {cap} times total, then output your JSON.
 
 Output ONLY JSON:
