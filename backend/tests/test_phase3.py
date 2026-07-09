@@ -230,6 +230,27 @@ async def test_to_evidence_rows_carries_published_at():
     assert rows[0]["published_at"] == "2026-07-08"
 
 
+async def test_to_evidence_rows_recomputes_domain_from_unwrapped_url():
+    from app.models import QASource, QuestionAnswer
+    from app.pipeline import s3_investigate as s3
+
+    qa = QuestionAnswer(
+        question="Who is CM?",
+        answer="DK Shivakumar",
+        answerable=True,
+        sources=[QASource(
+            url="https://www.google.com/url?url=https://www.hindustantimes.com/india-news/dk-shivakumar-is-the-new-chief-minister-of-karnataka-10162319418868.html",
+            title="t",
+            snippet="s",
+            published_at="2026-07-09",
+        )],
+    )
+
+    rows = s3._to_evidence_rows(qa, "model-a")
+    assert rows[0]["url"] == "https://www.hindustantimes.com/india-news/dk-shivakumar-is-the-new-chief-minister-of-karnataka-10162319418868.html"
+    assert rows[0]["domain"] == "hindustantimes.com"
+
+
 async def test_generate_queries_caps_at_three(monkeypatch):
     from app.pipeline import s3_investigate as s3
 

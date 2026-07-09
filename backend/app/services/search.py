@@ -4,7 +4,7 @@ down search provider must never crash the pipeline (Phase 2 resilience criterion
 import os
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import yaml
@@ -20,6 +20,19 @@ def factcheckers() -> list[str]:
 
 def _domain(url: str) -> str:
     return (urlparse(url).netloc or "").lower().removeprefix("www.")
+
+
+def canonical_url(url: str) -> str:
+    """Unwrap common redirect wrappers so attribution uses the destination URL."""
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    domain = (parsed.netloc or "").lower().removeprefix("www.")
+    if domain in {"google.com", "google.co.in"} and parsed.path == "/url":
+        target = parse_qs(parsed.query).get("url", [""])[0]
+        if target:
+            return target
+    return url
 
 
 async def web_search(query: str, recency: str | None = None, site: str | None = None) -> list[dict]:
@@ -40,8 +53,8 @@ async def web_search(query: str, recency: str | None = None, site: str | None = 
     except Exception:
         return []                               # SearXNG down → empty, never crash
     return [
-        {"url": x.get("url"), "title": x.get("title"), "snippet": x.get("content"),
-         "domain": _domain(x.get("url", "")), "published_at": x.get("publishedDate")}
+        {"url": canonical_url(x.get("url", "")), "title": x.get("title"), "snippet": x.get("content"),
+         "domain": _domain(canonical_url(x.get("url", ""))), "published_at": x.get("publishedDate")}
         for x in results if x.get("url")
     ]
 
@@ -80,6 +93,7 @@ async def factcheck_search(query: str) -> list[dict]:
                 for claim in r.json().get("claims", []):
                     for rev in claim.get("claimReview", []):
                         url = rev.get("url", "")
+                        url = canonical_url(url)
                         out.append({
                             "url": url, "domain": _domain(url),
                             "title": rev.get("title") or claim.get("text"),

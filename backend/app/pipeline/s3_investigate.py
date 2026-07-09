@@ -300,7 +300,7 @@ def _to_evidence_rows(qa: QuestionAnswer, found_by: str) -> list[dict]:
     """Expand one QuestionAnswer into one evidence row per source URL."""
     rows = []
     for src in (qa.sources or []):
-        url = (src.url or "").strip()
+        url = search.canonical_url((src.url or "").strip())
         if not url:
             continue
         dom = _domain(url)
