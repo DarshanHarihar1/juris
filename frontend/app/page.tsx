@@ -51,31 +51,31 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-dvh flex flex-col">
+    <main className="flex min-h-dvh flex-col">
       <header className="px-6 py-5">
         <Wordmark />
       </header>
 
-      <div className="flex-1 flex items-center justify-center px-6">
-        <div className="w-full max-w-xl -mt-16">
-          <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight leading-tight">
-            Is it true?
+      <div className="flex flex-1 items-center justify-center px-6">
+        <div className="-mt-16 w-full max-w-xl">
+          <h1 className="font-serif text-4xl font-semibold leading-tight tracking-tight sm:text-5xl">
+            Rumor ends here<span className="text-verdict-false">.</span>
           </h1>
-          <p className="mt-3 text-muted leading-relaxed">
-            Paste a claim or a forwarded message. Juris runs a single iterative verifier
-            that searches, checks evidence, and returns a cited verdict.
+          <p className="mt-3 text-muted">
+            Paste any forward. Get a verdict with receipts.
           </p>
 
-          <div className="mt-6">
-            <div className="mb-3 flex gap-1 text-sm">
+          <div
+            className="mt-8 rounded-2xl border border-line bg-white/70 shadow-sm
+                       transition focus-within:border-ink/30 focus-within:bg-white"
+          >
+            <div className="flex gap-1 border-b border-line/60 px-3 pt-3 pb-2 text-sm">
               {(["text", "url", "image"] as Mode[]).map((m) => (
                 <button
                   key={m}
                   onClick={() => setMode(m)}
                   className={`rounded-full px-3 py-1 capitalize transition ${
-                    mode === m
-                      ? "bg-ink text-paper"
-                      : "text-muted hover:text-ink border border-line"
+                    mode === m ? "bg-ink text-paper" : "text-muted hover:text-ink"
                   }`}
                 >
                   {m}
@@ -85,9 +85,8 @@ export default function Home() {
 
             {mode === "image" ? (
               <label
-                className="flex h-28 w-full cursor-pointer flex-col items-center justify-center gap-1
-                           rounded-xl border border-dashed border-line bg-white/60 text-sm text-muted
-                           transition hover:border-ink/30 hover:bg-white"
+                className="flex h-28 w-full cursor-pointer flex-col items-center justify-center
+                           gap-1 text-sm text-muted transition hover:text-ink"
               >
                 <input type="file" accept="image/*" onChange={onFile} className="hidden" />
                 {image ? (
@@ -101,45 +100,55 @@ export default function Home() {
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => {
-                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
+                  // Enter submits; Shift+Enter inserts a newline.
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    submit();
+                  }
                 }}
-                placeholder={mode === "url" ? "Paste a link to an article…" : "Paste the claim here…"}
-                rows={4}
-                className="w-full resize-none rounded-xl border border-line bg-white/60 px-4 py-3
-                           text-[15px] leading-relaxed outline-none transition
-                           focus:border-ink/30 focus:bg-white placeholder:text-muted/60"
+                placeholder={
+                  mode === "url" ? "Paste a link to an article…" : "Paste the claim here…"
+                }
+                rows={3}
+                autoFocus
+                className="w-full resize-none bg-transparent px-4 py-3 text-[15px]
+                           leading-relaxed outline-none placeholder:text-muted/60"
               />
             )}
 
-            <div className="mt-3 flex items-center justify-between gap-4">
-              <div className="flex flex-wrap gap-2">
-                {mode === "text" &&
-                  SAMPLES.map((s, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setText(s)}
-                      className="text-xs text-muted hover:text-ink border border-line hover:border-ink/30
-                                 rounded-full px-3 py-1 transition truncate max-w-[10rem] sm:max-w-[14rem]"
-                      title={s}
-                    >
-                      {s}
-                    </button>
-                  ))}
-              </div>
-
+            <div className="flex items-center justify-between gap-4 px-3 pb-3">
+              <span className="font-mono text-[11px] text-muted/60">
+                press <kbd className="rounded border border-line px-1">Enter</kbd> to verify
+              </span>
               <button
                 onClick={submit}
                 disabled={loading || !content}
-                className="shrink-0 rounded-full bg-ink text-paper text-sm font-medium px-5 py-2.5
-                           transition hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="shrink-0 rounded-full bg-ink px-5 py-2 text-sm font-medium text-paper
+                           transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {loading ? "Filing…" : "Verify"}
               </button>
             </div>
-
-            {err && <p className="mt-3 text-sm text-verdict-false">{err}</p>}
           </div>
 
+          {mode === "text" && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {SAMPLES.map((s, i) => (
+                <button
+                  key={i}
+                  onClick={() => setText(s)}
+                  className="max-w-[14rem] truncate rounded-full border border-line px-3 py-1
+                             text-xs text-muted transition hover:border-ink/30 hover:text-ink
+                             sm:max-w-[18rem]"
+                  title={s}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {err && <p className="mt-3 text-sm text-verdict-false">{err}</p>}
         </div>
       </div>
     </main>

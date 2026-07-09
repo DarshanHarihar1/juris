@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="7" fill="#faf9f7"/>
+  <rect x="4.5" y="4.5" width="23" height="23" rx="4" fill="none" stroke="#1c1917" stroke-width="2" transform="rotate(-3 16 16)"/>
+  <text x="16" y="22.5" font-family="Georgia, 'Times New Roman', serif" font-size="17" font-weight="700" fill="#1c1917" text-anchor="middle" transform="rotate(-3 16 16)">J</text>
+</svg>

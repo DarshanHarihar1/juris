@@ -1,21 +1,23 @@
-import { VerdictCard, VERDICT_COLOR, VERDICT_DOT } from "@/lib/types";
+import { VerdictCard, VERDICT_COLOR, VERDICT_BORDER } from "@/lib/types";
 import { withCites } from "@/lib/cite";
 import { RebuttalCard } from "./RebuttalCard";
 
 export function VerdictCardView({ card }: { card: VerdictCard }) {
   return (
     <div className="rounded-2xl border border-line bg-white p-6 animate-fade-up">
-      <div className="flex flex-wrap items-center gap-2.5">
-        <span className={`h-2.5 w-2.5 rounded-full ${VERDICT_DOT[card.verdict]}`} />
-        <span className={`font-mono text-sm font-semibold tracking-wide ${VERDICT_COLOR[card.verdict]}`}>
-          {card.verdict}
+      <div className="flex flex-wrap items-center gap-4">
+        {/* rubber-stamp verdict mark */}
+        <span
+          className={`inline-block rounded border-2 px-3 py-1 font-mono text-sm font-bold
+                      uppercase tracking-widest animate-stamp
+                      ${VERDICT_BORDER[card.verdict]} ${VERDICT_COLOR[card.verdict]}`}
+        >
+          {card.verdict.replace(/_/g, " ")}
         </span>
-        <span className="font-mono text-xs text-muted">
-          · {card.confidence}% confidence · via {card.path}
-        </span>
+        <span className="font-mono text-xs text-muted">{card.confidence}% confidence</span>
       </div>
 
-      <h2 className="mt-3 text-xl font-semibold leading-snug tracking-tight">
+      <h2 className="mt-4 font-serif text-2xl font-semibold leading-snug tracking-tight">
         {card.one_liner_native}
       </h2>
       {card.explanation_native && (

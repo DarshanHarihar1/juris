@@ -12,6 +12,7 @@ from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from . import config, db, worker
@@ -87,6 +88,40 @@ async def job_events(job_id: str):
         {"id": r["id"], "event": r["event"], "data": json.loads(r["data"]), "created_at": r["created_at"]}
         for r in rows
     ]}
+
+
+@app.get("/api/jobs/{job_id}/stream")
+async def job_stream(job_id: str, request: Request):
+    """SSE stream of events_log rows for the live investigation UI. Sets the SSE `id:`
+    field so EventSource reconnects resume gaplessly via Last-Event-ID. Closes after
+    a verdict/terminal event. ponytail: 500ms DB poll loop; LISTEN/NOTIFY if load matters."""
+    last_event_id = request.headers.get("last-event-id", "")
+    start_id = int(last_event_id) if last_event_id.isdigit() else 0
+
+    async def gen():
+        last_id, done = start_id, False
+        while not done:
+            if await request.is_disconnected():
+                return
+            async with (await db.pool()).acquire() as con:
+                rows = await con.fetch(
+                    "select id, event, data, created_at from events_log"
+                    " where job_id = $1::uuid and id > $2 order by id",
+                    job_id, last_id,
+                )
+            for r in rows:
+                last_id = r["id"]
+                done = done or r["event"] in ("verdict", "terminal")
+                payload = json.dumps({
+                    "id": r["id"], "event": r["event"],
+                    "data": json.loads(r["data"]), "created_at": str(r["created_at"]),
+                })
+                yield f"id: {r['id']}\ndata: {payload}\n\n"
+            if not done:
+                await asyncio.sleep(0.5)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/api/verdicts/{slug}")

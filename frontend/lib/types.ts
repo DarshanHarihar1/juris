@@ -69,11 +69,11 @@ export const VERDICT_COLOR: Record<VerdictClass, string> = {
   CONFLICTING: "text-verdict-conflicting",
 };
 
-export const VERDICT_DOT: Record<VerdictClass, string> = {
-  TRUE: "bg-verdict-true",
-  FALSE: "bg-verdict-false",
-  MOSTLY_TRUE: "bg-verdict-true",
-  MISLEADING: "bg-verdict-misleading",
-  UNVERIFIABLE: "bg-verdict-unverifiable",
-  CONFLICTING: "bg-verdict-conflicting",
+export const VERDICT_BORDER: Record<VerdictClass, string> = {
+  TRUE: "border-verdict-true",
+  FALSE: "border-verdict-false",
+  MOSTLY_TRUE: "border-verdict-true",
+  MISLEADING: "border-verdict-misleading",
+  UNVERIFIABLE: "border-verdict-unverifiable",
+  CONFLICTING: "border-verdict-conflicting",
 };
