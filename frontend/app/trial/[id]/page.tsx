@@ -127,9 +127,11 @@ export default function TrialPage({ params }: { params: { id: string } }) {
   for (const e of events) {
     const d = e.data || {};
     switch (e.event) {
-      case "stage":
-        stageStatus[d.stage] = d.status;
+      case "stage": {
+        const stage = d.stage === "SYNTHESIZE" ? "VERDICT" : d.stage;
+        stageStatus[stage] = d.status;
         break;
+      }
       case "claim": claim = d; break;
       case "evidence": evidence.push(d); break;
       case "verify_step": verifySteps.push(d); break;

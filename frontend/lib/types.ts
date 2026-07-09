@@ -49,13 +49,15 @@ export interface VerdictCard {
 export const STAGES = [
   "NORMALIZE",
   "VERIFY",
-  "SYNTHESIZE",
+  "VERDICT",
 ] as const;
 
 export const STAGE_LABEL: Record<string, string> = {
   NORMALIZE: "Normalize",
   VERIFY: "Verify",
-  SYNTHESIZE: "Synthesize",
+  VERDICT: "Verdict",
+  // legacy events from older deploys
+  SYNTHESIZE: "Verdict",
 };
 
 export const VERDICT_COLOR: Record<VerdictClass, string> = {

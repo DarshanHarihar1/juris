@@ -117,6 +117,82 @@ async def test_web_search_logs_request_errors(monkeypatch, caplog):
     assert any("SearXNG request failed" in r.message for r in caplog.records)
 
 
+async def test_web_search_retries_502(monkeypatch):
+    from app.services import search
+
+    calls = {"n": 0}
+
+    class _Resp:
+        def __init__(self, status_code: int, payload: dict | None = None):
+            self.status_code = status_code
+            self.text = "<html>502</html>"
+            self._payload = payload or {"results": [{"url": "https://example.com", "title": "ok", "content": "x", "score": 1}]}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                req = httpx.Request("GET", "https://searx.example/search")
+                raise httpx.HTTPStatusError("err", request=req, response=self)
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, params=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _Resp(502)
+            return _Resp(200)
+
+    monkeypatch.setenv("SEARXNG_URL", "https://searx.example")
+    monkeypatch.setattr(search, "_SEARCH_RETRY_DELAY", 0.01)
+    monkeypatch.setattr(search.httpx, "AsyncClient", _Client)
+
+    rows = await search.web_search("retry test")
+    assert calls["n"] == 2
+    assert len(rows) == 1
+    assert rows[0]["url"] == "https://example.com"
+
+
+async def test_warm_searxng_ok(monkeypatch):
+    from app.services import search
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": []}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, params=None):
+            return _Resp()
+
+    monkeypatch.setenv("SEARXNG_URL", "https://searx.example")
+    monkeypatch.setattr(search.httpx, "AsyncClient", _Client)
+
+    assert await search.warm_searxng() is True
+
+
 async def test_web_search_unwraps_google_redirect_urls(monkeypatch):
     from app.services import search
 

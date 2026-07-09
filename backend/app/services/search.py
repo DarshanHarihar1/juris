@@ -15,6 +15,12 @@ from ..config import thresholds
 log = logging.getLogger("juris.search")
 
 _TIMEOUT = 10.0
+_WAKE_TIMEOUT = 45.0
+_RETRY_STATUS = {502, 503, 504}
+_SEARCH_ATTEMPTS = 3
+_SEARCH_RETRY_DELAY = 12.0
+_WAKE_ATTEMPTS = 4
+_WAKE_RETRY_DELAY = 10.0
 _DATE_RE = re.compile(r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b")
 
 
@@ -45,6 +51,92 @@ def canonical_url(url: str) -> str:
     return url
 
 
+async def _searxng_get(
+    params: dict,
+    *,
+    timeout: float = _TIMEOUT,
+    max_attempts: int = _SEARCH_ATTEMPTS,
+    retry_delay: float = _SEARCH_RETRY_DELAY,
+) -> list[dict] | None:
+    """GET SearXNG /search; retry 502/503/504 and timeouts (cold-start on Render free tier)."""
+    base = _searxng_base()
+    if not base:
+        return None
+    url = f"{base}/search"
+    q = params.get("q", "")
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                r = await c.get(url, params=params)
+                if r.status_code in _RETRY_STATUS and attempt < max_attempts:
+                    log.warning(
+                        "SearXNG HTTP %s url=%s query=%r attempt=%d/%d, retrying in %.0fs",
+                        r.status_code, url, q, attempt, max_attempts, retry_delay,
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
+                r.raise_for_status()
+                return r.json().get("results", [])
+        except httpx.TimeoutException as exc:
+            last_exc = exc
+            if attempt < max_attempts:
+                log.warning(
+                    "SearXNG timeout url=%s query=%r attempt=%d/%d, retrying in %.0fs",
+                    url, q, attempt, max_attempts, retry_delay,
+                )
+                await asyncio.sleep(retry_delay)
+                continue
+            log.error("SearXNG timeout url=%s query=%r: %s", url, q, exc)
+        except httpx.HTTPStatusError as exc:
+            last_exc = exc
+            log.error(
+                "SearXNG HTTP %s url=%s query=%r body=%r: %s",
+                exc.response.status_code, url, q, exc.response.text[:200], exc,
+            )
+            return None
+        except httpx.RequestError as exc:
+            last_exc = exc
+            if attempt < max_attempts:
+                log.warning(
+                    "SearXNG request failed url=%s query=%r attempt=%d/%d, retrying in %.0fs: %s",
+                    url, q, attempt, max_attempts, retry_delay, exc,
+                )
+                await asyncio.sleep(retry_delay)
+                continue
+            log.error("SearXNG request failed url=%s query=%r: %s", url, q, exc)
+        except ValueError as exc:
+            last_exc = exc
+            log.error("SearXNG invalid JSON url=%s query=%r: %s", url, q, exc)
+        except Exception:
+            log.exception("SearXNG unexpected error url=%s query=%r", url, q)
+            return None
+
+    if last_exc:
+        return None
+    return None
+
+
+async def warm_searxng() -> bool:
+    """Pre-wake SearXNG on cold Render free tier before verify searches run."""
+    base = _searxng_base()
+    if not base:
+        log.warning("warm_searxng skipped: SEARXNG_URL is unset")
+        return False
+    results = await _searxng_get(
+        {"q": "test", "format": "json"},
+        timeout=_WAKE_TIMEOUT,
+        max_attempts=_WAKE_ATTEMPTS,
+        retry_delay=_WAKE_RETRY_DELAY,
+    )
+    if results is not None:
+        log.info("SearXNG warm ok base=%s", base)
+        return True
+    log.warning("SearXNG warm failed base=%s", base)
+    return False
+
+
 async def web_search(
     query: str,
     recency: str | None = None,
@@ -63,29 +155,8 @@ async def web_search(
         params["time_range"] = recency
     if categories:
         params["categories"] = categories
-    url = f"{base}/search"
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-            r = await c.get(url, params=params)
-            r.raise_for_status()
-            results = r.json().get("results", [])
-    except httpx.TimeoutException as exc:
-        log.error("SearXNG timeout url=%s query=%r: %s", url, q, exc)
-        return []
-    except httpx.HTTPStatusError as exc:
-        log.error(
-            "SearXNG HTTP %s url=%s query=%r body=%r: %s",
-            exc.response.status_code, url, q, exc.response.text[:200], exc,
-        )
-        return []
-    except httpx.RequestError as exc:
-        log.error("SearXNG request failed url=%s query=%r: %s", url, q, exc)
-        return []
-    except ValueError as exc:
-        log.error("SearXNG invalid JSON url=%s query=%r: %s", url, q, exc)
-        return []
-    except Exception:
-        log.exception("SearXNG unexpected error url=%s query=%r", url, q)
+    results = await _searxng_get(params)
+    if results is None:
         return []
     return [
         {"url": canonical_url(x.get("url", "")), "title": x.get("title"), "snippet": x.get("content"),

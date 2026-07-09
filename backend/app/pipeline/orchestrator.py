@@ -9,7 +9,7 @@ import logging
 from langsmith import traceable
 
 from ..db import pool
-from ..services import events, whatsapp
+from ..services import events, search as search_svc, whatsapp
 from . import s0_intake, s1_normalize, s6_synthesize, verify
 from .s6_synthesize import VerifiedPart
 
@@ -62,6 +62,7 @@ async def run(job: dict) -> None:
     if submission_id is None:
         raise ValueError("job has no submission_id (use POST /api/verify)")
     log.info("job=%s start submission=%s", job_id, submission_id)
+    warm_task = asyncio.create_task(search_svc.warm_searxng())
 
     async with (await pool()).acquire() as con:
         sub = await con.fetchrow(
@@ -75,6 +76,7 @@ async def run(job: dict) -> None:
     await events.emit(job_id, "stage", {"stage": "INTAKE", "status": "done"})
 
     if not text:
+        warm_task.cancel()
         msg = "Couldn't extract any text to verify from that input."
         await events.emit(job_id, "terminal", {"reason": "nothing_to_verify", "message": msg})
         if _wa(sub):
@@ -96,11 +98,14 @@ async def run(job: dict) -> None:
         await con.execute("update submissions set detected_lang = $2 where id = $1", submission_id, norm.language)
 
         if not norm.sub_claims:
+            warm_task.cancel()
             msg = "No checkable factual claim found — nothing to verify."
             await events.emit(job_id, "terminal", {"reason": "nothing_to_verify", "message": msg})
             if _wa(sub):
                 await whatsapp.deliver_text(con, submission_id, sub["reply_to"], msg)
             return
+
+        await warm_task
 
         parts = list(await asyncio.gather(*[
             _verify_one(job_id, submission_id, text, sc, norm.language)
