@@ -8,9 +8,10 @@ manipulation-technique tags, and a polite forwardable rebuttal at a permalink.
 **Live:**
 - App: https://juris-eta.vercel.app
 - API: https://juris-web.onrender.com (`GET /health`)
+- WhatsApp: Text claims to +1-480-XXX-XXXX (Twilio sandbox)
 
 Current scope: text, URL, and image intake; text-rendered verdict cards (no PNG
-export), all models via the **NVIDIA NIM** free tier.
+export), all models via **Groq** API.
 
 ---
 
@@ -20,17 +21,20 @@ export), all models via the **NVIDIA NIM** free tier.
 POST /api/verify
       │
       ▼
- A  Normalize          detect language, extract up to 3 check-worthy claims,
+ S0  Intake             detect content type, extract text/image
+      │
+      ▼
+ S1  Normalize          detect language, extract up to 3 check-worthy claims,
       │                produce English pivot + native-language form, and assign
       │                a temporal profile (`is_time_sensitive`, `as_of_date`,
       │                `volatility`)
       ▼
- B  Verify             one iterative tool-calling verifier per claim; each loop
+ S6  Verify             one iterative tool-calling verifier per claim; each loop
       │                chooses whether to `search`, `fetch_page`,
       │                `factcheck_search`, or answer with `final_verdict`
       │                while temporal validity is enforced in code
       ▼
- C  Synthesize         build the user-facing VerdictCard, persist it, and
+     Synthesize         build the user-facing VerdictCard, persist it, and
                        deliver the permalink / WhatsApp reply
 ```
 
@@ -47,8 +51,9 @@ an investigation feed: claim, streamed evidence, verify steps, and final verdict
 | Backend | FastAPI (async), single process runs both the API and an in-process job-queue worker | Render (web service) |
 | Meta-search | SearXNG (custom Docker image — JSON API enabled, limiter off) | Render (web service) |
 | Database | Postgres + pgvector (embeddings, ivfflat cosine index), Realtime | Supabase |
-| Models | NVIDIA NIM (OpenAI-compatible API), free tier | `build.nvidia.com` |
+| Models | Groq API (OpenAI-compatible, free tier) | `api.groq.com` |
 | Job queue | Plain Postgres table (`jobs`, `FOR UPDATE SKIP LOCKED`) — no Redis | Supabase |
+| Integrations | Twilio (WhatsApp), Google Fact Check API, LangSmith (tracing) | Various |
 
 **Why an in-process worker, not a separate service:** Render's free plan
 doesn't offer background workers (Starter+ only). The FastAPI `lifespan` starts
@@ -57,16 +62,16 @@ serves requests and drains the queue.
 
 ### Role → model matrix (`backend/app/config.yaml`)
 
-All model calls go through NVIDIA NIM. Diversity of model *families* per role
+All model calls go through Groq. Diversity of model *families* per role
 is deliberate — an adversarial debate between different models resists
 becoming an echo chamber:
 
 | Role | Model(s) |
 |---|---|
-| Normalizer | `meta/llama-3.1-8b-instruct` |
-| Verifier | `nvidia/nvidia-nemotron-nano-9b-v2` |
-| Synthesizer | `meta/llama-3.1-8b-instruct` |
-| OCR | `meta/llama-3.2-11b-vision-instruct` |
+| Normalizer | `mixtral-8x7b-32768` |
+| Verifier | `llama-3.1-70b-versatile` |
+| Synthesizer | `mixtral-8x7b-32768` |
+| OCR | `llama-3.2-11b-vision-preview` |
 
 Exact IDs are read from `config.yaml` at runtime. The verifier is optimized for
 tool-calling and long-lived claim context rather than multi-model diversity.
@@ -83,10 +88,15 @@ backend/
     config.py / config.yaml   role→model matrix, thresholds
     models.py             Pydantic schemas (Submission, Claim, VerdictCard, ...)
     db.py                  asyncpg pool (Supabase pooler-safe)
-    pipeline/              intake, normalize, verify, synthesize; orchestrator.py wires them
-    services/              nim.py, search.py, tools.py, credibility.py, citations.py, jobs.py, events.py, whatsapp.py
+    pipeline/              intake (s0), normalize (s1), verify (s6), synthesize; orchestrator.py wires them
+      s0_intake.py         request parsing, content-type detection
+      s1_normalize.py      language detection, claim extraction
+      verify.py            iterative tool-calling verifier loop
+      s6_synthesize.py     verdict card builder + permalink generation
+      orchestrator.py      pipeline orchestration
+    services/              nim.py (Groq client), search.py, tools.py, credibility.py, citations.py, jobs.py, events.py, whatsapp.py
     data/                  domains.yaml (credibility table), factcheckers.yaml (IFCN sites)
-  migrations/              0001 schema, 0002 RLS, 0003 frontend/Realtime, 0004 WhatsApp, 0006 v2 verdict/path widening
+  migrations/              0001 schema, 0002 RLS, 0003 frontend/Realtime, 0004 WhatsApp, 0005 QA evidence, 0006 v2 verdict, 0007 drop trials
   tests/                   v2-focused offline (mocked) + @needs_db live tests
 frontend/
   app/
@@ -94,11 +104,12 @@ frontend/
     investigation/[id]/page.tsx    live investigation feed (Supabase Realtime)
     trial/[id]/page.tsx            compatibility alias to investigation
     v/[slug]/page.tsx      SSR verdict permalink (SEO-crawlable)
-  components/               StageRail, EvidenceCard, VerdictCardView, RebuttalCard
+  components/               StageRail, EvidenceCard, VerdictCardView, RebuttalCard, etc.
   lib/                      types, Supabase client, API config, citation renderer
 searxng/                   custom Dockerfile + settings.yml (JSON API, limiter off)
 design/                    phase-by-phase spec docs (design/phase-N-*.md) + HLD/LLD
 render.yaml                Render Blueprint (web + searxng services)
+docker-compose.yml         Local dev: Postgres, Supabase emulator (optional)
 ```
 
 ---
@@ -110,7 +121,7 @@ render.yaml                Render Blueprint (web + searxng services)
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example ../.env   # fill in DATABASE_URL, NIM_API_KEY, etc. (see below)
+cp .env.example ../.env   # fill in DATABASE_URL, GROQ_API_KEY, etc. (see below)
 uvicorn app.main:app --reload
 ```
 
@@ -126,11 +137,11 @@ npm run dev
 ```bash
 cd backend
 pytest tests/ -q                              # offline tests only (no keys needed)
-DATABASE_URL=... NIM_API_KEY=... pytest tests/ -q   # full suite incl. live DB/NIM tests
+DATABASE_URL=... GROQ_API_KEY=... pytest tests/ -q   # full suite incl. live DB/Groq tests
 ```
-Tests are organized per phase (`test_phase0.py` … `test_phase5.py`), mirroring
-`design/phase-N-*.md`. Tests requiring a live DB or NIM key skip cleanly via
-`@needs_db` / `@needs_nim` markers when the corresponding env var is absent.
+Tests are organized per phase (`test_phase0.py` … `test_phase6.py`), mirroring
+`design/phase-N-*.md`. Tests requiring a live DB or Groq key skip cleanly via
+`@needs_db` / `@needs_groq` markers when the corresponding env var is absent.
 
 ---
 
@@ -141,9 +152,14 @@ Tests are organized per phase (`test_phase0.py` … `test_phase5.py`), mirroring
 | Var | Purpose |
 |---|---|
 | `DATABASE_URL` | Supabase Postgres connection (session pooler; pool capped at 5 to stay under the free-tier 15-client limit) |
-| `NIM_API_KEY` | NVIDIA NIM auth |
+| `GROQ_API_KEY` | Groq API key (model provider for normalizer, verifier, synthesizer, and OCR) |
 | `GOOGLE_FACTCHECK_API_KEY` | Google Fact Check Tools API (used by the verifier's `factcheck_search` tool) |
-| `SEARXNG_URL` | Internal URL of the SearXNG service (`web_search` tool) |
+| `SEARXNG_URL` | URL of the SearXNG meta-search service (`web_search` tool) |
+| `TWILIO_ACCOUNT_SID` | Twilio account ID for WhatsApp integration |
+| `TWILIO_AUTH_TOKEN` | Twilio auth token for WhatsApp integration |
+| `TWILIO_WHATSAPP_FROM` | Twilio WhatsApp sender number (format: `whatsapp:+1...`) |
+| `WA_HASH_SALT` | Salt for per-user WhatsApp hash generation (must be constant for consistent user tracking) |
+| `LANGSMITH_API_KEY` | LangSmith API key for tracing (optional; if absent, tracing is disabled) |
 
 **Frontend** (`frontend/.env.local` / Vercel project env):
 
@@ -173,7 +189,7 @@ Tests are organized per phase (`test_phase0.py` … `test_phase5.py`), mirroring
 
 ### Debugging a live deploy
 ```bash
-render logs --resources <service-id> --limit 200 -o text | grep juris.
+render logs --resources juris-web --limit 200 -o text | grep juris.
 ```
 Every pipeline decision is logged under `juris.*` — claim normalization,
 verify steps, evidence counts, tool usage, and the final verdict path.
@@ -185,6 +201,7 @@ verify steps, evidence counts, tool usage, and the final verdict path.
 - **No PNG export** — verdict cards are text-only (WhatsApp message + web page).
 - **Free-tier cold starts** — Render's free web services and SearXNG spin down
   after ~15 min idle; the first request after that takes ~30–60s.
+- **WhatsApp sandbox** — currently on Twilio sandbox; production setup requires Business Account verification.
 
 ## Research foundations
 
@@ -201,12 +218,7 @@ fact-checking, iterative retrieval, and temporal validity. Key references:
 | [OpenFactCheck](https://arxiv.org/abs/2408.11832) | Retrieval silence on static claims is weak evidence, supporting the constrained parametric fallback for non-time-sensitive facts |
 
 ## Global conventions
-- **Models:** all via NVIDIA NIM (`https://integrate.api.nvidia.com/v1`,
-  OpenAI-compatible, `Bearer $NIM_API_KEY`). Role→model matrix in
-  `backend/app/config.yaml`.
-- **Rate limit:** ~40 req/min free tier → global semaphore in `services/nim.py`,
-  plus a 45s per-request timeout with fallback-model retry.
-- **Structured output everywhere:** every model call validates against a
-  Pydantic schema; retry ×1 on invalid, then degrade/fallback.
-- **Cost:** $0 — every service used is on a free tier. The budget managed is
-  requests/min, not dollars.
+- **Models:** all via Groq (`https://api.groq.com/openai/v1`, OpenAI-compatible, `Bearer $GROQ_API_KEY`). Role→model matrix in `backend/app/config.yaml`.
+- **Rate limit:** Groq free tier allows 30 requests/min; managed by request backoff in `services/nim.py`.
+- **Structured output everywhere:** every model call validates against a Pydantic schema; retry ×1 on invalid, then degrade/fallback.
+- **Cost:** $0 — every service used is on a free tier. The budget managed is requests/min, not dollars. 
