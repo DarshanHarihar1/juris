@@ -8,6 +8,13 @@
         "--access-token",
         "${SUPABASE_ACCESS_TOKEN}"
       ]
+    },
+    "langsmith": {
+      "command": "uvx",
+      "args": ["langsmith-mcp-server"],
+      "env": {
+        "LANGSMITH_API_KEY": "${LANGSMITH_API_KEY}"
+      }
     }
   }
 }
