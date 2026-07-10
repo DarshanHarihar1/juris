@@ -2,9 +2,9 @@
 import pytest
 
 from app.models import SubClaimVerdict
-from app.pipeline import s6_synthesize as s6
-from app.pipeline.s6_synthesize import VerifiedPart
-from app.services.nim import NimResponse
+from app.pipeline import synthesize as synth
+from app.pipeline.synthesize import VerifiedPart
+from app.services.mesh import MeshResponse
 
 pytestmark = pytest.mark.asyncio
 
@@ -20,7 +20,7 @@ pytestmark = pytest.mark.asyncio
     ([], "unverifiable"),
 ])
 def test_and_combine_table(inputs, expected):
-    assert s6.and_combine(inputs) == expected
+    assert synth.and_combine(inputs) == expected
 
 
 def test_format_single_no_llm():
@@ -29,27 +29,27 @@ def test_format_single_no_llm():
         explanation="Siddaramaiah is the CM.",
         evidence=["https://pib.gov.in/cm"],
     )
-    out = s6.format_single(scv)
+    out = synth.format_single(scv)
     assert out.explanation_native == "Siddaramaiah is the CM."
     assert "FALSE" in out.one_liner_native
     assert "https://pib.gov.in/cm" in out.rebuttal_card_native
 
 
-async def test_single_claim_verdict_stage_skips_nim(monkeypatch):
+async def test_single_claim_verdict_stage_skips_mesh(monkeypatch):
     calls = []
 
     async def boom(*a, **k):
         calls.append(1)
         raise AssertionError("Stage-3 must not call NIM for N=1")
 
-    monkeypatch.setattr(s6.nim, "call", boom)
+    monkeypatch.setattr(synth.mesh, "call", boom)
 
     emits = []
 
     async def fake_emit(*a, **k):
         emits.append((a, k))
 
-    monkeypatch.setattr(s6.events, "emit", fake_emit)
+    monkeypatch.setattr(synth.events, "emit", fake_emit)
 
     class FakeCon:
         async def execute(self, *a, **k):
@@ -64,7 +64,7 @@ async def test_single_claim_verdict_stage_skips_nim(monkeypatch):
             evidence=["https://example.com/cm"],
         ),
     )
-    card = await s6.verdict_stage(
+    card = await synth.verdict_stage(
         FakeCon(), "job-1", claim_id="cid-1", original="DKS is the CM of Karnataka.",
         lang="en", parts=[part],
     )
@@ -74,24 +74,24 @@ async def test_single_claim_verdict_stage_skips_nim(monkeypatch):
     assert card.evidence and card.evidence[0].url.startswith("http")
 
 
-async def test_multi_claim_calls_nim_once(monkeypatch):
+async def test_multi_claim_calls_mesh_once(monkeypatch):
     calls = []
 
     async def fake_call(role_name, messages, response_schema=None, **k):
         calls.append(role_name)
         assert role_name == "synthesizer"
-        assert response_schema is s6.SummaryOutput
-        return NimResponse(
+        assert response_schema is synth.SummaryOutput
+        return MeshResponse(
             text='{"explanation":"Delhi is capital; Modi is PM."}',
             model="openai/gpt-oss-20b",
-            parsed=s6.SummaryOutput(explanation="Delhi is capital; Modi is PM."),
+            parsed=synth.SummaryOutput(explanation="Delhi is capital; Modi is PM."),
         )
 
     async def _emit(*a, **k):
         return None
 
-    monkeypatch.setattr(s6.nim, "call", fake_call)
-    monkeypatch.setattr(s6.events, "emit", _emit)
+    monkeypatch.setattr(synth.mesh, "call", fake_call)
+    monkeypatch.setattr(synth.events, "emit", _emit)
 
     class FakeCon:
         async def execute(self, *a, **k):
@@ -105,7 +105,7 @@ async def test_multi_claim_calls_nim_once(monkeypatch):
                      SubClaimVerdict(verdict="true", explanation="Modi is PM.",
                                      evidence=["https://www.pmindia.gov.in/"])),
     ]
-    card = await s6.verdict_stage(
+    card = await synth.verdict_stage(
         FakeCon(), "job-2", claim_id="c1",
         original="delhi and modi is the capital and pm of india",
         lang="en", parts=parts,
@@ -123,8 +123,8 @@ async def test_multi_false_dominates_and_summary_fallback(monkeypatch):
     async def _emit(*a, **k):
         return None
 
-    monkeypatch.setattr(s6.nim, "call", boom)
-    monkeypatch.setattr(s6.events, "emit", _emit)
+    monkeypatch.setattr(synth.mesh, "call", boom)
+    monkeypatch.setattr(synth.events, "emit", _emit)
 
     class FakeCon:
         async def execute(self, *a, **k):
@@ -137,7 +137,7 @@ async def test_multi_false_dominates_and_summary_fallback(monkeypatch):
                      SubClaimVerdict(verdict="false", explanation="B fails.",
                                      evidence=["https://example.com/b"])),
     ]
-    card = await s6.verdict_stage(
+    card = await synth.verdict_stage(
         FakeCon(), "job-3", claim_id="c1", original="A and B", lang="en", parts=parts,
     )
     assert card.verdict == "FALSE"

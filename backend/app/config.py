@@ -49,7 +49,7 @@ def thresholds() -> dict:
     return cfg()["thresholds"]
 
 
-def nim_api_key(provider_name: str | None = None) -> str:
+def mesh_api_key(provider_name: str | None = None) -> str:
     auth_env = provider(provider_name)["auth_env"]
     key = os.environ.get(auth_env)
     if not key:

@@ -1,5 +1,5 @@
 """Phase 0 verification (design/phase-0-foundation.md):
-  - NIM smoke: nim.call returns a schema-valid object; bad schema → 1 retry → fallback.
+  - MeshAPI smoke: mesh.call returns a schema-valid object; bad schema → 1 retry → fallback.
   - Queue: 5 jobs, 2 concurrent workers → each claimed exactly once.
   - Migration: down then up rebuilds all 7 tables + ivfflat index.
 Live-service tests skip cleanly when DATABASE_URL / NIM_API_KEY are absent."""
@@ -7,20 +7,20 @@ import asyncio
 
 import pytest
 
-from conftest import needs_db, needs_nim
+from conftest import needs_db, needs_mesh
 
 pytestmark = pytest.mark.asyncio
 
 
-@needs_nim
-async def test_nim_smoke():
+@needs_mesh
+async def test_mesh_smoke():
     from pydantic import BaseModel
-    from app.services import nim
+    from app.services import mesh
 
     class Answer(BaseModel):
         answer: str
 
-    resp = await nim.call(
+    resp = await mesh.call(
         "normalizer",
         [{"role": "user", "content": 'Reply with JSON {"answer": "pong"}. Only JSON.'}],
         response_schema=Answer,

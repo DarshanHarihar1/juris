@@ -11,7 +11,7 @@ manipulation-technique tags, and a polite forwardable rebuttal at a permalink.
 - WhatsApp: Text claims to +1-480-XXX-XXXX (Twilio sandbox)
 
 Current scope: text, URL, and image intake; text-rendered verdict cards (no PNG
-export), all models via **Groq** API.
+export), all models via **MeshAPI**.
 
 ---
 
@@ -29,7 +29,7 @@ POST /api/verify
       │                a temporal profile (`is_time_sensitive`, `as_of_date`,
       │                `volatility`)
       ▼
- S6  Verify             one iterative tool-calling verifier per claim; each loop
+     Verify             one iterative tool-calling verifier per claim; each loop
       │                chooses whether to `search`, `fetch_page`,
       │                `factcheck_search`, or answer with `final_verdict`
       │                while temporal validity is enforced in code
@@ -51,7 +51,7 @@ an investigation feed: claim, streamed evidence, verify steps, and final verdict
 | Backend | FastAPI (async), single process runs both the API and an in-process job-queue worker | Render (web service) |
 | Meta-search | SearXNG (custom Docker image — JSON API enabled, limiter off) | Render (web service) |
 | Database | Postgres + pgvector (embeddings, ivfflat cosine index), Realtime | Supabase |
-| Models | Groq API (OpenAI-compatible, free tier) | `api.groq.com` |
+| Models | MeshAPI (OpenAI-compatible, unified router) | `api.meshapi.ai` |
 | Job queue | Plain Postgres table (`jobs`, `FOR UPDATE SKIP LOCKED`) — no Redis | Supabase |
 | Integrations | Twilio (WhatsApp), Google Fact Check API, LangSmith (tracing) | Various |
 
@@ -62,19 +62,18 @@ serves requests and drains the queue.
 
 ### Role → model matrix (`backend/app/config.yaml`)
 
-All model calls go through Groq. Diversity of model *families* per role
-is deliberate — an adversarial debate between different models resists
-becoming an echo chamber:
+All model calls go through MeshAPI, a single OpenAI-compatible router with
+unified billing across providers.
 
-| Role | Model(s) |
+| Role | Model |
 |---|---|
-| Normalizer | `mixtral-8x7b-32768` |
-| Verifier | `llama-3.1-70b-versatile` |
-| Synthesizer | `mixtral-8x7b-32768` |
-| OCR | `llama-3.2-11b-vision-preview` |
+| Normalizer | `openai/gpt-oss-120b` |
+| Verifier | `openai/gpt-oss-120b` |
+| Synthesizer | `openai/gpt-oss-120b` |
+| OCR | `google/gemma-3-4b-it` — cheapest MeshAPI model that accepts image input |
 
 Exact IDs are read from `config.yaml` at runtime. The verifier is optimized for
-tool-calling and long-lived claim context rather than multi-model diversity.
+tool-calling and long-lived claim context.
 
 ---
 
@@ -88,13 +87,13 @@ backend/
     config.py / config.yaml   role→model matrix, thresholds
     models.py             Pydantic schemas (Submission, Claim, VerdictCard, ...)
     db.py                  asyncpg pool (Supabase pooler-safe)
-    pipeline/              intake (s0), normalize (s1), verify (s6), synthesize; orchestrator.py wires them
+    pipeline/              intake (s0), normalize (s1), verify, synthesize; orchestrator.py wires them
       s0_intake.py         request parsing, content-type detection
       s1_normalize.py      language detection, claim extraction
       verify.py            iterative tool-calling verifier loop
-      s6_synthesize.py     verdict card builder + permalink generation
+      synthesize.py        verdict card builder + permalink generation
       orchestrator.py      pipeline orchestration
-    services/              nim.py (Groq client), search.py, tools.py, credibility.py, citations.py, jobs.py, events.py, whatsapp.py
+    services/              mesh.py (MeshAPI client), search.py, tools.py, credibility.py, citations.py, jobs.py, events.py, whatsapp.py
     data/                  domains.yaml (credibility table), factcheckers.yaml (IFCN sites)
   migrations/              0001 schema, 0002 RLS, 0003 frontend/Realtime, 0004 WhatsApp, 0005 QA evidence, 0006 v2 verdict, 0007 drop trials
   tests/                   v2-focused offline (mocked) + @needs_db live tests
@@ -121,7 +120,7 @@ docker-compose.yml         Local dev: Postgres, Supabase emulator (optional)
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example ../.env   # fill in DATABASE_URL, GROQ_API_KEY, etc. (see below)
+cp .env.example ../.env   # fill in DATABASE_URL, MESH_API_KEY, etc. (see below)
 uvicorn app.main:app --reload
 ```
 
@@ -137,11 +136,11 @@ npm run dev
 ```bash
 cd backend
 pytest tests/ -q                              # offline tests only (no keys needed)
-DATABASE_URL=... GROQ_API_KEY=... pytest tests/ -q   # full suite incl. live DB/Groq tests
+DATABASE_URL=... MESH_API_KEY=... pytest tests/ -q   # full suite incl. live DB/MeshAPI tests
 ```
 Tests are organized per phase (`test_phase0.py` … `test_phase6.py`), mirroring
-`design/phase-N-*.md`. Tests requiring a live DB or Groq key skip cleanly via
-`@needs_db` / `@needs_groq` markers when the corresponding env var is absent.
+`design/phase-N-*.md`. Tests requiring a live DB or MeshAPI key skip cleanly via
+`@needs_db` / `@needs_mesh` markers when the corresponding env var is absent.
 
 ---
 
@@ -152,7 +151,7 @@ Tests are organized per phase (`test_phase0.py` … `test_phase6.py`), mirroring
 | Var | Purpose |
 |---|---|
 | `DATABASE_URL` | Supabase Postgres connection (session pooler; pool capped at 5 to stay under the free-tier 15-client limit) |
-| `GROQ_API_KEY` | Groq API key (model provider for normalizer, verifier, synthesizer, and OCR) |
+| `MESH_API_KEY` | MeshAPI key (sole model provider for normalizer, verifier, synthesizer, and OCR) |
 | `GOOGLE_FACTCHECK_API_KEY` | Google Fact Check Tools API (used by the verifier's `factcheck_search` tool) |
 | `SEARXNG_URL` | URL of the SearXNG meta-search service (`web_search` tool) |
 | `TWILIO_ACCOUNT_SID` | Twilio account ID for WhatsApp integration |
@@ -194,6 +193,18 @@ render logs --resources juris-web --limit 200 -o text | grep juris.
 Every pipeline decision is logged under `juris.*` — claim normalization,
 verify steps, evidence counts, tool usage, and the final verdict path.
 
+### GitHub Actions workflows (`.github/workflows/`)
+
+Both are cron-triggered keep-alive pings — Render's free tier spins services
+down after ~15 min idle and Supabase auto-pauses a project after 7 days idle.
+
+| Workflow | Schedule | Purpose |
+|---|---|---|
+| `health-cron.yml` | daily, 06:00 UTC | Curls `juris-web`'s `/health`; keeps Supabase from auto-pausing and warms the Render web service. Reads the `HEALTH_URL` repo secret. |
+| `searxng-warm.yml` | every 14 min | Curls SearXNG with a throwaway query, retrying up to 4× on cold-start 502s. Reads the optional `SEARXNG_PING_URL` repo secret (defaults to the public SearXNG URL). |
+
+Both also support `workflow_dispatch` for a manual run from the Actions tab.
+
 ---
 
 ## Current limitations
@@ -218,7 +229,7 @@ fact-checking, iterative retrieval, and temporal validity. Key references:
 | [OpenFactCheck](https://arxiv.org/abs/2408.11832) | Retrieval silence on static claims is weak evidence, supporting the constrained parametric fallback for non-time-sensitive facts |
 
 ## Global conventions
-- **Models:** all via Groq (`https://api.groq.com/openai/v1`, OpenAI-compatible, `Bearer $GROQ_API_KEY`). Role→model matrix in `backend/app/config.yaml`.
-- **Rate limit:** Groq free tier allows 30 requests/min; managed by request backoff in `services/nim.py`.
+- **Models:** all via MeshAPI (`https://api.meshapi.ai/v1`, OpenAI-compatible, `Bearer $MESH_API_KEY`). Role→model matrix in `backend/app/config.yaml`.
+- **Rate limit:** managed by request backoff in `services/mesh.py`.
 - **Structured output everywhere:** every model call validates against a Pydantic schema; retry ×1 on invalid, then degrade/fallback.
 - **Cost:** $0 — every service used is on a free tier. The budget managed is requests/min, not dollars. 

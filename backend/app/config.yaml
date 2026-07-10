@@ -1,23 +1,19 @@
-# config.yaml — role→model matrix + thresholds. Providers are OpenAI-compatible.
-# Groq model IDs: https://console.groq.com/docs/models
-# Cerebras model IDs: https://inference-docs.cerebras.ai/models/overview.md
+# config.yaml — role→model matrix + thresholds. All roles route through MeshAPI
+# (OpenAI-compatible). Model IDs: https://developers.meshapi.ai/docs/introduction/available-models
 roles:
-  normalizer:   { provider: groq, model: openai/gpt-oss-20b, temp: 0.0, include_reasoning: false }
-  verifier:     { provider: cerebras, model: gpt-oss-120b, temp: 0.1 }
-  synthesizer:  { provider: groq, model: openai/gpt-oss-20b, temp: 0.2, include_reasoning: false }
-  # ponytail: Scout is preview; only vision model on this Groq account for OCR.
-  ocr:          { provider: groq, model: meta-llama/llama-4-scout-17b-16e-instruct }
-default_provider: groq
+  normalizer:   { provider: meshapi, model: openai/gpt-oss-120b, temp: 0.0, include_reasoning: false }
+  verifier:     { provider: meshapi, model: openai/gpt-oss-120b, temp: 0.1 }
+  synthesizer:  { provider: meshapi, model: openai/gpt-oss-120b, temp: 0.2, include_reasoning: false }
+  # ponytail: gpt-oss-120b is text-only — OCR needs a vision model.
+  # google/gemma-3-4b-it is the cheapest MeshAPI model that accepts image input
+  # ($0.04/$0.08 per 1M prompt/completion tokens); verified working via base64 image_url.
+  ocr:          { provider: meshapi, model: google/gemma-3-4b-it, temp: 0.0 }
+default_provider: meshapi
 providers:
-  groq:
-    base_url: https://api.groq.com/openai/v1
-    auth_env: GROQ_API_KEY
-    fallback_model: openai/gpt-oss-20b
-    rate_limit: 40
-  cerebras:
-    base_url: https://api.cerebras.ai/v1
-    auth_env: CEREBRAS_API_KEY
-    fallback_model: gpt-oss-120b
+  meshapi:
+    base_url: https://api.meshapi.ai/v1
+    auth_env: MESH_API_KEY
+    fallback_model: openai/gpt-oss-120b
     rate_limit: 20
 thresholds:
   max_verify_steps: 6

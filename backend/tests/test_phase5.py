@@ -8,7 +8,7 @@ import json
 from conftest import needs_db
 
 from app.models import SynthOutput
-from app.pipeline import s6_synthesize as s6
+from app.pipeline import synthesize as synth
 
 EV = [
     {
@@ -39,7 +39,7 @@ def test_build_card_keeps_explanation():
         one_liner_native="Yeh dava galat hai.",
         explanation_native="The wall is not visible unaided.",
         rebuttal_card_native="Galat dava. https://altnews.in/x")
-    card = s6.build_card("cid-1", "claim en", "claim native", "FALSE", 90, "verify", EV, out)
+    card = synth.build_card("cid-1", "claim en", "claim native", "FALSE", 90, "verify", EV, out)
     assert "wall is not visible" in card.explanation_native
     assert card.manipulation_tags == []
 
@@ -47,19 +47,19 @@ def test_build_card_keeps_explanation():
 def test_rebuttal_constraints():
     no_url = SynthOutput(one_liner_native="x", explanation_native="ok.",
                          rebuttal_card_native="This claim is false, please verify before sharing.")
-    card = s6.build_card("cid-3", "c", "c", "FALSE", 80, "verify", EV, no_url)
+    card = synth.build_card("cid-3", "c", "c", "FALSE", 80, "verify", EV, no_url)
     assert len(card.rebuttal_card_native) <= 400 and "http" in card.rebuttal_card_native
 
     long = SynthOutput(one_liner_native="x", explanation_native="ok.",
                        rebuttal_card_native="x" * 600 + " https://pib.gov.in/y")
-    card2 = s6.build_card("cid-4", "c", "c", "FALSE", 80, "verify", EV, long)
+    card2 = synth.build_card("cid-4", "c", "c", "FALSE", 80, "verify", EV, long)
     assert len(card2.rebuttal_card_native) <= 400
 
 
 def test_slug_and_models_used():
     out = SynthOutput(one_liner_native="x", explanation_native="ok.",
                       rebuttal_card_native="https://pib.gov.in/y")
-    card = s6.build_card("abcd1234-0000-0000-0000-000000000000", "The Great Wall claim", "c",
+    card = synth.build_card("abcd1234-0000-0000-0000-000000000000", "The Great Wall claim", "c",
                          "FALSE", 90, "verify", EV, out)
     assert card.slug.startswith("the-great-wall-claim-") and card.slug.endswith("abcd1234")
     assert card.models_used["synthesizer"]
@@ -71,7 +71,7 @@ def test_slug_and_models_used():
 async def test_persist_and_permalink(monkeypatch):
     from app import db
 
-    monkeypatch.setattr(s6.events, "emit", _emit)
+    monkeypatch.setattr(synth.events, "emit", _emit)
 
     con = await (await db.pool()).acquire()
     try:
@@ -82,7 +82,7 @@ async def test_persist_and_permalink(monkeypatch):
             "insert into claims (submission_id, text_original, text_norm, text_norm_native, claim_type) "
             "values ($1,$2,$2,$2,'factual') returning id", sub, "Great Wall visible from space")
 
-        card = await s6.synthesize(
+        card = await synth.synthesize(
             con, "00000000-0000-0000-0000-000000000000", claim_id,
             claim_en="Great Wall visible from space",
             claim_native="Great Wall visible from space",

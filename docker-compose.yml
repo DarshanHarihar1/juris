@@ -1,4 +1,4 @@
-# Local dev — web + worker against the Supabase Postgres (set DATABASE_URL/GROQ_API_KEY
+# Local dev — web + worker against the Supabase Postgres (set DATABASE_URL/MESH_API_KEY
 # in a root .env). Mirrors the two Render services. Not used in production deploy.
 services:
   web:

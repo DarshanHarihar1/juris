@@ -7,7 +7,7 @@ import re
 import httpx
 
 from ..config import role
-from ..services import nim
+from ..services import mesh
 
 _WS = re.compile(r"\s+")
 _SCRIPT_STYLE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.I | re.S)
@@ -56,7 +56,7 @@ async def _ocr(image_ref: str) -> str:
         return ""
     model = role("ocr")["model"]
     try:
-        msg = await nim.chat(model, [{"role": "user", "content": [
+        msg = await mesh.chat(model, [{"role": "user", "content": [
             {"type": "text", "text": _OCR_PROMPT},
             {"type": "image_url", "image_url": {"url": image_ref}},
         ]}])

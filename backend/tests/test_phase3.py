@@ -141,7 +141,7 @@ async def test_temporal_guard_forces_research(monkeypatch):
         return next(responses)
 
     monkeypatch.setattr(v2, "_search_tool", fake_search)
-    monkeypatch.setattr(v2.nim, "chat", fake_chat)
+    monkeypatch.setattr(v2.mesh, "chat", fake_chat)
 
     out = await v2.verify_with_evidence("job-1", "DKS is the CM of Karnataka.", claim_id=None)
     assert out.verdict == "false"
@@ -165,7 +165,7 @@ async def test_schema_retry_then_settle(monkeypatch):
     async def fake_chat(*a, **k):
         return next(responses)
 
-    monkeypatch.setattr(v2.nim, "chat", fake_chat)
+    monkeypatch.setattr(v2.mesh, "chat", fake_chat)
     out = await v2.verify_with_evidence("job-1", "The Earth orbits the Sun.", claim_id=None)
     assert out.verdict == "unverifiable"
     assert out.explanation
@@ -174,7 +174,7 @@ async def test_schema_retry_then_settle(monkeypatch):
 async def test_force_verdict_on_budget(monkeypatch):
     from app.models import SubClaimVerdict
     from app.pipeline import verify as v2
-    from app.services.nim import NimResponse
+    from app.services.mesh import MeshResponse
 
     monkeypatch.setattr(v2.events, "emit", _noop_emit)
     monkeypatch.setattr(v2, "thresholds", lambda: {"max_verify_steps": 2, "verify_budget_s": 75})
@@ -190,7 +190,7 @@ async def test_force_verdict_on_budget(monkeypatch):
 
     async def fake_call(role_name, messages, response_schema=None, **k):
         assert response_schema is SubClaimVerdict
-        return NimResponse(
+        return MeshResponse(
             text='{"verdict":"unverifiable","explanation":"No evidence found.","evidence":[]}',
             model="llama-3.3-70b-versatile",
             parsed=SubClaimVerdict(
@@ -199,8 +199,8 @@ async def test_force_verdict_on_budget(monkeypatch):
         )
 
     monkeypatch.setattr(v2, "_search_tool", fake_search)
-    monkeypatch.setattr(v2.nim, "chat", fake_chat)
-    monkeypatch.setattr(v2.nim, "call", fake_call)
+    monkeypatch.setattr(v2.mesh, "chat", fake_chat)
+    monkeypatch.setattr(v2.mesh, "call", fake_call)
 
     out = await v2.verify_with_evidence("job-1", "Some obscure claim about X.", claim_id=None)
     assert out.verdict == "unverifiable"

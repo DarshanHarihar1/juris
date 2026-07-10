@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from ..config import thresholds
 from ..models import SubClaimVerdict
-from ..services import events, nim, search, tools
+from ..services import events, mesh, search, tools
 
 VERIFY_PROMPT = """You are a fact-checker and verifier. Use your own knowledge for stable, general
 facts, but your knowledge has a cutoff. **Today is {today}.** For anything
@@ -259,9 +259,9 @@ async def _emit_evidence(job_id, claim_id, rows: list[dict]) -> None:
 
 
 async def _force_verdict(messages: list[dict], evidence_log: list[dict], timeout: float) -> SubClaimVerdict:
-    """Budget exhausted → one structured JSON call with schema retry via nim.call."""
+    """Budget exhausted → one structured JSON call with schema retry via mesh.call."""
     try:
-        resp = await nim.call(
+        resp = await mesh.call(
             "verifier",
             messages + [{"role": "user", "content": FORCE_VERDICT}],
             response_schema=SubClaimVerdict,
@@ -309,7 +309,7 @@ async def _verify(job_id, claim, *, claim_id=None, lang: str = "en") -> SubClaim
         if remaining <= 0:
             break
         try:
-            msg = await nim.chat(None, messages, tools=schemas, role_name="verifier", timeout=remaining)
+            msg = await mesh.chat(None, messages, tools=schemas, role_name="verifier", timeout=remaining)
         except BadRequestError as e:
             err = str(e).lower()
             if "tool_use_failed" in err or "tool call validation" in err:

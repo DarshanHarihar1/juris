@@ -16,8 +16,8 @@ for line in (Path(__file__).parent.parent.parent / ".env").read_text().splitline
         os.environ.setdefault(k, v)
 
 needs_db = pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="DATABASE_URL not set")
-needs_nim = pytest.mark.skipif(
-    not os.environ.get("GROQ_API_KEY"), reason="GROQ_API_KEY not set"
+needs_mesh = pytest.mark.skipif(
+    not os.environ.get("MESH_API_KEY"), reason="MESH_API_KEY not set"
 )
 
 

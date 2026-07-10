@@ -235,7 +235,7 @@ async def _call_with_supported_kwargs(fn: Callable[..., Any], **available: Any) 
 async def _try_synthesize(lang: str, claim: Any, verdict: dict[str, Any], original: str) -> Any:
     claim_text = claim if isinstance(claim, str) else getattr(claim, "text_norm", str(claim))
     claim_native = claim_text if isinstance(claim, str) else getattr(claim, "text_norm_native", claim_text)
-    for module_name in ("app.pipeline.synthesize_v2", "app.pipeline.v2_synthesize", "app.pipeline.s6_synthesize"):
+    for module_name in ("app.pipeline.synthesize_v2", "app.pipeline.v2_synthesize", "app.pipeline.synthesize"):
         try:
             module = import_module(module_name)
         except ModuleNotFoundError:

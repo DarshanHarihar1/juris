@@ -1,6 +1,6 @@
 # Render Blueprint — Juris backend: Web Service (FastAPI, runs the job queue
 # in-process) + SearXNG meta-search. Auto-deploy on push to main. Set
-# GROQ_API_KEY and DATABASE_URL in the
+# MESH_API_KEY and DATABASE_URL in the
 # Render dashboard (sync: false = secret, entered once per service).
 services:
   - type: web
@@ -18,7 +18,7 @@ services:
       # 3.12 has wheels for every pinned dep. Bump when the stack ships cp314 wheels.
       - key: PYTHON_VERSION
         value: "3.12.8"
-      - key: GROQ_API_KEY
+      - key: MESH_API_KEY
         sync: false
       - key: DATABASE_URL
         sync: false

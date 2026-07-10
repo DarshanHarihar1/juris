@@ -10,8 +10,8 @@ from langsmith import traceable
 
 from ..db import pool
 from ..services import events, search as search_svc, whatsapp
-from . import s0_intake, s1_normalize, s6_synthesize, verify
-from .s6_synthesize import VerifiedPart
+from . import s0_intake, s1_normalize, synthesize, verify
+from .synthesize import VerifiedPart
 
 log = logging.getLogger("juris.orchestrator")
 
@@ -112,7 +112,7 @@ async def run(job: dict) -> None:
             for sc in norm.sub_claims
         ]))
 
-        await s6_synthesize.verdict_stage(
+        await synthesize.verdict_stage(
             con,
             job_id,
             claim_id=parts[0].claim_id,

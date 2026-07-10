@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from conftest import needs_db, needs_nim
+from conftest import needs_db, needs_mesh
 
 pytestmark = pytest.mark.asyncio
 
@@ -63,14 +63,14 @@ async def test_s0_image_ocr(monkeypatch):
         assert messages[0]["content"][1]["image_url"]["url"].startswith("data:image/")
         return type("M", (), {"content": "Lemon water cures cancer"})()
 
-    monkeypatch.setattr(s0_intake.nim, "chat", _fake_chat)
+    monkeypatch.setattr(s0_intake.mesh, "chat", _fake_chat)
     out = await s0_intake.intake("image", None, "data:image/png;base64,AAAA")
     assert out == "Lemon water cures cancer"
     assert await s0_intake.intake("image", None, "not-an-image") == ""
 
 
 # --- language detect (no LLM) --------------------------------------------------
-def test_detect_language_no_nim():
+def test_detect_language_no_mesh():
     from app.pipeline import s1_normalize
 
     assert s1_normalize.detect_language("DKS is the CM of Karnataka.") == "en"
@@ -90,7 +90,7 @@ async def test_normalize_one_llm_call_and_schema(monkeypatch):
             "parsed": ExtractOutput(sub_claims=["D.K. Shivakumar is the Chief Minister of Karnataka."])
         })()
 
-    monkeypatch.setattr(s1_normalize.nim, "call", fake_call)
+    monkeypatch.setattr(s1_normalize.mesh, "call", fake_call)
     out = await s1_normalize.normalize("DKS is the CM of Karnataka.")
 
     assert len(calls) == 1
@@ -110,7 +110,7 @@ async def test_normalize_one_sub_claim(monkeypatch):
             "parsed": ExtractOutput(sub_claims=["DKS is the CM of Karnataka."])
         })()
 
-    monkeypatch.setattr(s1_normalize.nim, "call", fake_call)
+    monkeypatch.setattr(s1_normalize.mesh, "call", fake_call)
     out = await s1_normalize.normalize("DKS is the CM of Karnataka.")
     assert len(out.sub_claims) == 1
     assert "DKS" in out.sub_claims[0] or "Karnataka" in out.sub_claims[0]
@@ -128,7 +128,7 @@ async def test_normalize_multi_sub_claims(monkeypatch):
             ])
         })()
 
-    monkeypatch.setattr(s1_normalize.nim, "call", fake_call)
+    monkeypatch.setattr(s1_normalize.mesh, "call", fake_call)
     out = await s1_normalize.normalize("The Earth is flat and vaccines cause autism.")
     assert len(out.sub_claims) == 2
     assert all(isinstance(c, str) and c.strip() for c in out.sub_claims)
@@ -141,7 +141,7 @@ async def test_normalize_empty_and_cap(monkeypatch):
     async def empty(*a, **k):
         return type("Resp", (), {"parsed": ExtractOutput(sub_claims=[])})()
 
-    monkeypatch.setattr(s1_normalize.nim, "call", empty)
+    monkeypatch.setattr(s1_normalize.mesh, "call", empty)
     assert (await s1_normalize.normalize("forward to 10 people!!")).sub_claims == []
 
     async def many(*a, **k):
@@ -149,7 +149,7 @@ async def test_normalize_empty_and_cap(monkeypatch):
             "parsed": ExtractOutput(sub_claims=[f"Claim {i}." for i in range(10)])
         })()
 
-    monkeypatch.setattr(s1_normalize.nim, "call", many)
+    monkeypatch.setattr(s1_normalize.mesh, "call", many)
     out = await s1_normalize.normalize("many facts")
     assert len(out.sub_claims) == s1_normalize.MAX_SUB_CLAIMS
 
@@ -163,13 +163,13 @@ async def test_normalize_strips_blank_entries(monkeypatch):
             "parsed": ExtractOutput(sub_claims=["  Real claim.  ", "", "  "])
         })()
 
-    monkeypatch.setattr(s1_normalize.nim, "call", fake_call)
+    monkeypatch.setattr(s1_normalize.mesh, "call", fake_call)
     out = await s1_normalize.normalize("noise")
     assert out.sub_claims == ["Real claim."]
 
 
 # --- golden mini-set (live NIM) ------------------------------------------------
-@needs_nim
+@needs_mesh
 async def test_normalize_noisy_single_claim():
     from app.pipeline import s1_normalize
 
@@ -183,7 +183,7 @@ async def test_normalize_noisy_single_claim():
     assert "forward" not in joined and "😱" not in joined
 
 
-@needs_nim
+@needs_mesh
 async def test_compound_split():
     from app.pipeline import s1_normalize
 
@@ -191,7 +191,7 @@ async def test_compound_split():
     assert len(out.sub_claims) >= 2
 
 
-@needs_nim
+@needs_mesh
 async def test_opinion_filter():
     from app.pipeline import s1_normalize
 
@@ -199,7 +199,7 @@ async def test_opinion_filter():
     assert out.sub_claims == []
 
 
-@needs_nim
+@needs_mesh
 async def test_normalize_canonical_one_claim():
     from app.pipeline import s1_normalize
 
@@ -210,7 +210,7 @@ async def test_normalize_canonical_one_claim():
 
 # --- end-to-end through the worker ----------------------------------------------
 @needs_db
-@needs_nim
+@needs_mesh
 async def test_verify_to_claims_e2e():
     from app import db, worker
     from app.services import jobs

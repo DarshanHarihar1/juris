@@ -1,7 +1,7 @@
 """Stage 3 — Verdict: AND-combine + format (1 claim) or summarize (N≥2).
 
 Single sub-claim: no LLM — format verify agent's {verdict, explanation, evidence}.
-Multi: rule-based AND label + one gpt-oss-20b summary call (Groq).
+Multi: rule-based AND label + one gpt-oss-120b summary call (MeshAPI).
 """
 import json
 import re
@@ -13,7 +13,7 @@ from pydantic import BaseModel, field_validator
 
 from ..config import role
 from ..models import EvidenceRef, SubClaimVerdict, SynthOutput, VerdictCard, to_db_verdict
-from ..services import events, nim
+from ..services import events, mesh
 
 REBUTTAL_MAX = 400
 
@@ -140,7 +140,7 @@ async def summarize_multi(
         f"Sub-claim findings:\n" + "\n\n".join(lines)
     )
     try:
-        resp = await nim.call(
+        resp = await mesh.call(
             "synthesizer",
             [
                 {"role": "system", "content": SUMMARY_SYSTEM.format(

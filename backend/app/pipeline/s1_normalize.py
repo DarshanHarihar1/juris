@@ -6,7 +6,7 @@ checkworthiness. Grounding (`Today is <as-of-date>`) lives in Verify (Phase 3).
 from langsmith import traceable
 
 from ..models import ExtractOutput, NormalizerOutput
-from ..services import nim
+from ..services import mesh
 
 # ponytail: hard cap for cost; raise if multi-claim forwards routinely exceed 3.
 MAX_SUB_CLAIMS = 3
@@ -59,7 +59,7 @@ def detect_language(text: str, hint: str | None = None) -> str:
 @traceable(name="normalize")
 async def normalize(text: str, lang_hint: str | None = None) -> NormalizerOutput:
     language = detect_language(text, lang_hint)
-    resp = await nim.call(
+    resp = await mesh.call(
         "normalizer",
         [
             {"role": "system", "content": SYSTEM.format(max_claims=MAX_SUB_CLAIMS)},
