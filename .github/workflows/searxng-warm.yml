@@ -1,0 +1,30 @@
+# Ping juris-searxng every 14 min — Render free tier spins down after ~15 min idle.
+# Cold wake takes ~35s; retry 502s like the backend warm_searxng() path.
+# Optional repo secret SEARXNG_PING_URL overrides the default public URL.
+name: searxng-warm
+on:
+  schedule:
+    - cron: "*/14 * * * *"   # every 14 minutes
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: warm SearXNG
+        env:
+          SEARXNG_PING_URL: ${{ secrets.SEARXNG_PING_URL }}
+        run: |
+          URL="${SEARXNG_PING_URL:-https://juris-searxng.onrender.com/search?q=ping&format=json}"
+          for i in 1 2 3 4; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 90 "$URL")
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then
+              exit 0
+            fi
+            if [ "$i" -lt 4 ]; then
+              sleep 15
+            fi
+          done
+          echo "SearXNG did not return 200 after 4 attempts"
+          exit 1
