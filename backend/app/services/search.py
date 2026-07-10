@@ -191,6 +191,22 @@ def _is_time_sensitive(claim) -> bool:
     return bool(_TIME_SENSITIVE_RE.search(text))
 
 
+# "Who holds office right now" claims — pin recency to the day window so the
+# freshest evidence wins. Narrower than _TIME_SENSITIVE_RE (which also matches
+# past-dated events that should NOT be forced to a 1-day window).
+_OFFICE_HOLDER_RE = re.compile(
+    r"\b(current|currently|now|incumbent|reigning|as\s+of)\b|"
+    r"\b(president|prime\s+minister|\bpm\b|chief\s+minister|\bcm\b|"
+    r"governor|mayor|ceo|chancellor|monarch|king|queen|pope)\b",
+    re.I,
+)
+
+
+def _is_office_holder_claim(claim) -> bool:
+    text = claim if isinstance(claim, str) else str(_claim_attr(claim, "text_norm", claim) or "")
+    return bool(_OFFICE_HOLDER_RE.search(text))
+
+
 def _parse_date(value) -> date | None:
     if value is None:
         return None
@@ -268,6 +284,11 @@ async def search(
     """Merged search+auto-fetch. Returns evidence rows e1, e2, ... after temporal
     filtering, score ranking, and top-N Jina fetch."""
     ts = thresholds()
+    # Hard-pin office-holder / "current X" claims to the day window: for "who
+    # holds office right now", only the freshest evidence is authoritative.
+    # Overrides whatever the model passed.
+    if _is_office_holder_claim(claim):
+        time_range = "day"
     hits = await web_search(
         query,
         recency=time_range,
@@ -315,7 +336,15 @@ async def fetch_page(url: str) -> dict:
     Falls back to {} on any error. Optional JINA_API_KEY unlocks higher rate limits."""
     if not url:
         return {}
-    headers = {"Accept": "text/plain", "X-Return-Format": "markdown"}
+    # Strip page chrome and images so the article body — not the nav/menu at the
+    # top — is what survives the downstream char-truncation. Both selectors
+    # degrade gracefully (no match → nothing removed, full page returned).
+    headers = {
+        "Accept": "text/plain",
+        "X-Return-Format": "markdown",
+        "X-Retain-Images": "none",
+        "X-Remove-Selector": "nav, header, footer, aside",
+    }
     key = os.environ.get("JINA_API_KEY")
     if key:
         headers["Authorization"] = f"Bearer {key}"

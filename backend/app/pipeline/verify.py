@@ -61,6 +61,11 @@ TEMPORAL_NUDGE = (
     "Rejected: this claim is time-sensitive, but evidence had no retrieved URLs. "
     "Call search again, then settle with JSON including evidence URLs from the results."
 )
+FALSE_NUDGE = (
+    "Rejected: your FALSE verdict rests on the absence of confirming evidence. "
+    "Absence is not proof of falsity. Either cite evidence that directly "
+    "contradicts the claim, or return verdict 'unverifiable'."
+)
 SCHEMA_RETRY = (
     "Your previous reply failed schema validation: {err}. "
     "Reply with ONLY valid JSON matching "
@@ -162,6 +167,38 @@ def _temporal_guard_ok(claim, verdict: SubClaimVerdict) -> bool:
     return any(_looks_like_url(u) for u in verdict.evidence)
 
 
+# A FALSE verdict must rest on contradicting evidence, never on the mere
+# absence of confirmation. Absence → "unverifiable". These markers catch the
+# common "the results don't say X, therefore X is false" failure mode.
+_ABSENCE_MARKERS = (
+    "no evidence", "not provide any evidence", "does not provide", "do not provide",
+    "does not indicate", "do not indicate", "does not mention", "do not mention",
+    "no mention", "could not find", "couldn't find", "not find any", "no indication",
+    "lack of evidence", "absence of", "no information", "no confirmation",
+    "does not confirm", "do not confirm", "not enough evidence", "no proof", "no results",
+)
+
+
+def _is_absence_reasoning(text: str | None) -> bool:
+    low = (text or "").lower()
+    return any(m in low for m in _ABSENCE_MARKERS)
+
+
+def _false_guard_ok(verdict: SubClaimVerdict) -> bool:
+    """A FALSE verdict must contradict the claim, not merely lack confirmation."""
+    if verdict.verdict != "false":
+        return True
+    return not _is_absence_reasoning(verdict.explanation)
+
+
+def _downgrade_to_unverifiable(verdict: SubClaimVerdict, evidence_log: list[dict]) -> SubClaimVerdict:
+    return SubClaimVerdict(
+        verdict="unverifiable",
+        explanation=verdict.explanation or "Absence of confirming evidence is not proof of falsity.",
+        evidence=verdict.evidence or _urls_from_log(evidence_log),
+    )
+
+
 def _fallback_verdict(evidence_log: list[dict], explanation: str | None = None) -> SubClaimVerdict:
     urls = _urls_from_log(evidence_log)
     return SubClaimVerdict(
@@ -216,7 +253,10 @@ async def _force_verdict(messages: list[dict], evidence_log: list[dict], timeout
         )
         if resp.parsed is None:
             return _fallback_verdict(evidence_log)
-        return _fill_evidence(resp.parsed, evidence_log)  # type: ignore[arg-type]
+        final = _fill_evidence(resp.parsed, evidence_log)  # type: ignore[arg-type]
+        if not _false_guard_ok(final):
+            final = _downgrade_to_unverifiable(final, evidence_log)
+        return final
     except Exception:
         return _fallback_verdict(evidence_log)
 
@@ -247,6 +287,7 @@ async def _verify(job_id, claim, *, claim_id=None, lang: str = "en") -> SubClaim
             pass
 
     temporal_rejects = 0
+    false_rejects = 0
     schema_retries = 0
     for step in range(1, max_steps + 1):
         remaining = deadline - time.monotonic()
@@ -280,6 +321,15 @@ async def _verify(job_id, claim, *, claim_id=None, lang: str = "en") -> SubClaim
                 if temporal_rejects >= 2:
                     break
                 continue
+            if not _false_guard_ok(verdict):
+                false_rejects += 1
+                if false_rejects >= 2:
+                    # Model won't cite contradicting evidence → don't emit a
+                    # false-by-absence verdict; downgrade instead.
+                    verdict = _downgrade_to_unverifiable(verdict, evidence_log)
+                else:
+                    messages.append({"role": "user", "content": FALSE_NUDGE})
+                    continue
             verdict = _fill_evidence(verdict, evidence_log)
             if claim_id is not None and job_id is not None:
                 try:
