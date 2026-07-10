@@ -47,6 +47,7 @@ async def test_fetch_page_uses_jina_reader(monkeypatch):
 
     monkeypatch.setenv("JINA_API_KEY", "test-key")
     monkeypatch.setattr(search.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(search, "_extract_trafilatura", lambda url: None)
 
     page = await search.fetch_page("https://www.cricbuzz.com/live-cricket-scorecard/123")
     assert page == {
@@ -56,6 +57,34 @@ async def test_fetch_page_uses_jina_reader(monkeypatch):
     assert seen["url"] == "https://r.jina.ai/https://www.cricbuzz.com/live-cricket-scorecard/123"
     assert seen["headers"]["Authorization"] == "Bearer test-key"
     assert seen["headers"]["X-Return-Format"] == "markdown"
+
+
+async def test_fetch_page_prefers_trafilatura(monkeypatch):
+    from app.services import search
+
+    monkeypatch.setattr(search, "_extract_trafilatura", lambda url: "a" * 300)
+
+    async def boom(url):
+        raise AssertionError("should not fall back to Jina when Trafilatura succeeds")
+
+    monkeypatch.setattr(search, "_fetch_page_jina", boom)
+
+    page = await search.fetch_page("https://example.com/article")
+    assert page == {"url": "https://example.com/article", "text": "a" * 300}
+
+
+async def test_fetch_page_falls_back_when_trafilatura_too_thin(monkeypatch):
+    from app.services import search
+
+    monkeypatch.setattr(search, "_extract_trafilatura", lambda url: "too short")
+
+    async def fake_jina(url):
+        return {"url": url, "text": "jina rendered it"}
+
+    monkeypatch.setattr(search, "_fetch_page_jina", fake_jina)
+
+    page = await search.fetch_page("https://example.com/js-heavy")
+    assert page == {"url": "https://example.com/js-heavy", "text": "jina rendered it"}
 
 
 async def test_web_search_hostport_gets_http_scheme(monkeypatch):

@@ -9,6 +9,7 @@ import re
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+import trafilatura
 
 from ..config import thresholds
 
@@ -22,6 +23,9 @@ _SEARCH_RETRY_DELAY = 12.0
 _WAKE_ATTEMPTS = 4
 _WAKE_RETRY_DELAY = 10.0
 _DATE_RE = re.compile(r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b")
+# Below this, treat Trafilatura's extraction as "page needs JS" and fall back to Jina
+# (e.g. infinite-scroll listing pages, paywalls) rather than returning thin text.
+_MIN_TRAFILATURA_CHARS = 200
 
 
 def _searxng_base() -> str | None:
@@ -331,11 +335,34 @@ async def search(
     return rows
 
 
+def _extract_trafilatura(url: str) -> str | None:
+    """Blocking: download + parse in one call. Run off the event loop via to_thread."""
+    downloaded = trafilatura.fetch_url(url)
+    if not downloaded:
+        return None
+    return trafilatura.extract(downloaded, output_format="markdown", include_comments=False)
+
+
 async def fetch_page(url: str) -> dict:
-    """Fetch a URL via Jina Reader (r.jina.ai), which renders JS and returns clean Markdown.
-    Falls back to {} on any error. Optional JINA_API_KEY unlocks higher rate limits."""
+    """Fetch a URL's article text. Trafilatura first — in-process HTML parse, no
+    remote render, ~10-30x faster on ordinary static article pages. Falls back to
+    Jina Reader (renders JS) when Trafilatura comes back empty or too thin to be
+    useful, e.g. JS-heavy listing pages or paywalls."""
     if not url:
         return {}
+    try:
+        text = await asyncio.to_thread(_extract_trafilatura, url)
+    except Exception:
+        log.exception("Trafilatura fetch unexpected error url=%r", url)
+        text = None
+    if text and len(text) >= _MIN_TRAFILATURA_CHARS:
+        return {"url": url, "text": text[:4000]}
+    return await _fetch_page_jina(url)
+
+
+async def _fetch_page_jina(url: str) -> dict:
+    """Fetch a URL via Jina Reader (r.jina.ai), which renders JS and returns clean Markdown.
+    Falls back to {} on any error. Optional JINA_API_KEY unlocks higher rate limits."""
     # Strip page chrome and images so the article body — not the nav/menu at the
     # top — is what survives the downstream char-truncation. Both selectors
     # degrade gracefully (no match → nothing removed, full page returned).

@@ -92,8 +92,10 @@ If no sub-claims survive filtering, the job terminates early with
 Each sub-claim gets its own verifier loop, running in parallel when there are
 multiple claims. The agent has a single tool:
 
-- **`search`** — SearXNG meta-search (top 5 by score) → Jina Reader fetch for
-  full page text → evidence rows emitted to `events_log` as they arrive.
+- **`search`** — SearXNG meta-search (top 5 by score) → page fetch for full
+  text (Trafilatura first, in-process HTML parse; falls back to Jina Reader
+  for JS-heavy/paywalled pages that come back empty or too thin) → evidence
+  rows emitted to `events_log` as they arrive.
 
 When ready, the agent replies with structured JSON validated against
 `SubClaimVerdict`:
@@ -181,10 +183,12 @@ disconnects. The permalink at `/v/[slug]` is SSR for SEO.
 └────────────┘  └───────┬────────┘
                         │
                         ▼
-                 ┌──────────────┐
-                 │ Jina Reader  │
-                 │ (page fetch) │
-                 └──────────────┘
+                 ┌──────────────────┐
+                 │ Trafilatura      │
+                 │ (page fetch,     │
+                 │  falls back to   │
+                 │  Jina Reader)    │
+                 └──────────────────┘
 ```
 
 ### Layer breakdown
@@ -195,7 +199,7 @@ disconnects. The permalink at `/v/[slug]` is SSR for SEO.
 | Backend API | FastAPI (async), CORS open | Render web service | `POST /api/verify`, `GET /api/jobs/{id}/events`, `GET /api/verdicts/{slug}`, `POST /webhooks/whatsapp` |
 | Worker | asyncio poll loop in same process (`lifespan` task) | Render web service | `claim_next()` → `orchestrator.run()` → `mark_done` / `mark_error` |
 | Meta-search | SearXNG (custom Docker image — JSON API enabled, limiter off) | Render web service | Aggregates web/news results; retried on 502/503/504 cold starts |
-| Page fetch | Jina Reader (`r.jina.ai`) | External | Full-text extraction for top search hits |
+| Page fetch | Trafilatura (in-process HTML parse), falls back to Jina Reader (`r.jina.ai`) for thin/empty results | In-process / External | Full-text extraction for top search hits |
 | Database | Postgres + pgvector, Realtime publication | Supabase | Persistence, job queue, live event stream |
 | Models | MeshAPI (OpenAI-compatible router) | `api.meshapi.ai` | Normalizer, verifier, synthesizer, OCR — unified billing |
 | Job queue | Postgres `jobs` table, `FOR UPDATE SKIP LOCKED` | Supabase | Postgres-backed queue; safe under concurrent workers |
@@ -212,7 +216,7 @@ disconnects. The permalink at `/v/[slug]` is SSR for SEO.
 | `pipeline/synthesize.py` | AND-combine, format/summarize, persist `VerdictCard` |
 | `pipeline/orchestrator.py` | Stage machine, parallel verify, WhatsApp delivery |
 | `services/mesh.py` | MeshAPI client, rate limiting (20 req/min), Pydantic schema validation |
-| `services/search.py` | SearXNG wrapper, Jina fetch, temporal heuristics, evidence shaping |
+| `services/search.py` | SearXNG wrapper, page fetch (Trafilatura → Jina fallback), temporal heuristics, evidence shaping |
 | `services/tools.py` | Tool registry (`search`) |
 | `services/jobs.py` | Enqueue / claim / status transitions |
 | `services/events.py` | Append-only `events_log` writes |
