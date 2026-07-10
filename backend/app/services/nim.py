@@ -9,15 +9,14 @@ from langsmith.wrappers import wrap_openai
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
-from ..config import nim_api_key, provider, role
+from ..config import model_provider_name, nim_api_key, provider, role, role_provider_name
 
 Message = dict[str, Any]
 Tool = dict[str, Any]
 
-# Global semaphore shared by every call — caps concurrent in-flight requests
-# so concurrent claim verification stays under the free-tier ceiling.
-# ponytail: concurrency cap, not a token-bucket. Add time-based limiting if 429s persist.
-_sem = asyncio.Semaphore(provider().get("rate_limit", 40))
+# Per-provider semaphores cap concurrent in-flight requests so claim verification
+# stays under each provider's rate ceiling.
+_sems: dict[str, asyncio.Semaphore] = {}
 
 # Per-request ceiling. The OpenAI client default is 600s, which would
 # let one slow model stall a whole job; on timeout call() falls back to the fallback model.
@@ -26,17 +25,27 @@ NIM_TIMEOUT = 45.0
 # Groq-only knobs — openai SDK may not accept them as top-level kwargs.
 _EXTRA_BODY_KEYS = frozenset({"reasoning_effort", "include_reasoning", "reasoning_format"})
 
-_client: AsyncOpenAI | None = None
+_clients: dict[str, AsyncOpenAI] = {}
 
 
-def _get_client() -> AsyncOpenAI:
-    global _client
-    if _client is None:
-        _client = wrap_openai(
-            AsyncOpenAI(base_url=provider()["base_url"], api_key=nim_api_key()),
+def _get_client(provider_name: str) -> AsyncOpenAI:
+    client = _clients.get(provider_name)
+    if client is None:
+        cfg = provider(provider_name)
+        client = wrap_openai(
+            AsyncOpenAI(base_url=cfg["base_url"], api_key=nim_api_key(provider_name)),
             tracing_extra={"metadata": {"service": "juris-backend"}},
         )
-    return _client
+        _clients[provider_name] = client
+    return client
+
+
+def _get_semaphore(provider_name: str) -> asyncio.Semaphore:
+    sem = _sems.get(provider_name)
+    if sem is None:
+        sem = asyncio.Semaphore(provider(provider_name).get("rate_limit", 40))
+        _sems[provider_name] = sem
+    return sem
 
 
 @dataclass
@@ -46,14 +55,15 @@ class NimResponse:
     parsed: BaseModel | None = None
 
 
-def _resolve_model(role_name: str) -> tuple[str, dict]:
-    """Return (model_id, params) for a role. Params carry temp etc. where present."""
+def _resolve_model(role_name: str) -> tuple[str, dict, str]:
+    """Return (model_id, params, provider_name) for a role."""
     entry = role(role_name)
     if isinstance(entry, dict):
         params = {k: v for k, v in entry.items() if k not in ("model", "tools", "dims")}
+        provider_name = params.pop("provider", role_provider_name(role_name))
         if "temp" in params:                       # config uses `temp`; API wants `temperature`
             params["temperature"] = params.pop("temp")
-        return entry["model"], params
+        return entry["model"], params, provider_name
     raise ValueError(f"role '{role_name}' is not a single-model role (got {type(entry).__name__})")
 
 
@@ -72,8 +82,12 @@ async def call(
     model_id: str | None = None,
 ) -> NimResponse:
     # model_id override remains available for explicit one-off model calls.
-    model, params = (model_id, {}) if model_id else _resolve_model(role_name)
-    fallback = provider()["fallback_model"]
+    model, params, provider_name = (
+        model_id,
+        {},
+        role_provider_name(role_name) if role_name else model_provider_name(model_id),
+    ) if model_id else _resolve_model(role_name)
+    fallback = provider(provider_name)["fallback_model"]
 
     async def _once(model_id: str, extra_user: str | None = None) -> Any:
         msgs = messages + ([{"role": "user", "content": extra_user}] if extra_user else [])
@@ -85,8 +99,8 @@ async def call(
             kwargs["response_format"] = {"type": "json_object"}
         if extra:
             kwargs["extra_body"] = extra
-        async with _sem:
-            return await _get_client().chat.completions.create(**kwargs)
+        async with _get_semaphore(provider_name):
+            return await _get_client(provider_name).chat.completions.create(**kwargs)
 
     def _wrap(resp: Any, model_id: str) -> NimResponse:
         text = resp.choices[0].message.content or ""
@@ -121,10 +135,13 @@ async def chat(
     message object (.content, .tool_calls) for the verifier loop.
     Callers may pass an explicit model_id or resolve a single-model role."""
     params: dict[str, Any] = {}
+    provider_name: str
     if model_id is None:
         if role_name is None:
             raise ValueError("chat() requires model_id or role_name")
-        model_id, params = _resolve_model(role_name)
+        model_id, params, provider_name = _resolve_model(role_name)
+    else:
+        provider_name = role_provider_name(role_name) if role_name else model_provider_name(model_id)
     std, extra = _split_params(params)
     kwargs: dict[str, Any] = {"model": model_id, "messages": messages, "timeout": timeout or NIM_TIMEOUT, **std}
     if tools:
@@ -139,6 +156,6 @@ async def chat(
         )
     if extra:
         kwargs["extra_body"] = extra
-    async with _sem:
-        resp = await _get_client().chat.completions.create(**kwargs)
+    async with _get_semaphore(provider_name):
+        resp = await _get_client(provider_name).chat.completions.create(**kwargs)
     return resp.choices[0].message

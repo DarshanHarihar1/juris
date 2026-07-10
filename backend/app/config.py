@@ -18,18 +18,42 @@ def role(name: str) -> dict | list:
     return cfg()["roles"][name]
 
 
-def provider() -> dict:
-    return cfg()["provider"]
+def default_provider_name() -> str:
+    return cfg().get("default_provider", "default")
+
+
+def provider(name: str | None = None) -> dict:
+    conf = cfg()
+    # Backward-compatible with the old single-provider shape.
+    if "providers" not in conf:
+        return conf["provider"]
+    provider_name = name or default_provider_name()
+    return conf["providers"][provider_name]
+
+
+def role_provider_name(role_name: str) -> str:
+    entry = role(role_name)
+    if not isinstance(entry, dict):
+        return default_provider_name()
+    return entry.get("provider", default_provider_name())
+
+
+def model_provider_name(model_id: str) -> str:
+    for name, entry in cfg()["roles"].items():
+        if isinstance(entry, dict) and entry.get("model") == model_id:
+            return entry.get("provider", default_provider_name())
+    return default_provider_name()
 
 
 def thresholds() -> dict:
     return cfg()["thresholds"]
 
 
-def nim_api_key() -> str:
-    key = os.environ.get(provider()["auth_env"])
+def nim_api_key(provider_name: str | None = None) -> str:
+    auth_env = provider(provider_name)["auth_env"]
+    key = os.environ.get(auth_env)
     if not key:
-        raise RuntimeError(f"{provider()['auth_env']} not set in environment")
+        raise RuntimeError(f"{auth_env} not set in environment")
     return key
 
 

@@ -132,6 +132,21 @@ def _safe_summary(text: str | None) -> str:
     return summary[:240]
 
 
+_EVIDENCE_STUB = "[older search results omitted to save context — cited URLs retained in evidence]"
+
+
+def _trim_old_evidence(messages: list[dict]) -> None:
+    """Sliding window: keep only the most recent tool (evidence) block in context.
+    Older tool messages are blanked in place — structure is preserved so each tool
+    message still pairs with its assistant tool_call (required by the API). The
+    verdict's evidence URLs live in evidence_log, so nothing citable is lost. This
+    pins per-call context to ~one evidence block instead of growing every round."""
+    tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    for i in tool_idxs[:-1]:
+        if messages[i].get("content") != _EVIDENCE_STUB:
+            messages[i]["content"] = _EVIDENCE_STUB
+
+
 def _agent_rows_for_prompt(rows: list[dict]) -> list[dict]:
     """Shape tool results as top-5 {score, url, title, content} for the agent."""
     out = []
@@ -383,6 +398,7 @@ async def _verify(job_id, claim, *, claim_id=None, lang: str = "en") -> SubClaim
             "tool_call_id": call.id,
             "content": json.dumps(_agent_rows_for_prompt(rows))[:12000],
         })
+        _trim_old_evidence(messages)  # keep only the latest evidence block in context
         # After search, nudge settle-or-search so the model doesn't stall.
         messages.append({"role": "user", "content": NUDGE_SEARCH_OR_SETTLE})
 

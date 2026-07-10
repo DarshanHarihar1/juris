@@ -1,16 +1,24 @@
-# config.yaml — role→model matrix + thresholds. Models via Groq (OpenAI-compatible).
-# IDs from https://console.groq.com/docs/models
+# config.yaml — role→model matrix + thresholds. Providers are OpenAI-compatible.
+# Groq model IDs: https://console.groq.com/docs/models
+# Cerebras model IDs: https://inference-docs.cerebras.ai/models/overview.md
 roles:
-  normalizer:   { model: openai/gpt-oss-20b, temp: 0.0, include_reasoning: false }
-  verifier:     { model: llama-3.3-70b-versatile, temp: 0.1 }
-  synthesizer:  { model: openai/gpt-oss-20b, temp: 0.2, include_reasoning: false }
+  normalizer:   { provider: groq, model: openai/gpt-oss-20b, temp: 0.0, include_reasoning: false }
+  verifier:     { provider: cerebras, model: gpt-oss-120b, temp: 0.1 }
+  synthesizer:  { provider: groq, model: openai/gpt-oss-20b, temp: 0.2, include_reasoning: false }
   # ponytail: Scout is preview; only vision model on this Groq account for OCR.
-  ocr:          { model: meta-llama/llama-4-scout-17b-16e-instruct }
-provider:
-  base_url: https://api.groq.com/openai/v1
-  auth_env: GROQ_API_KEY
-  fallback_model: openai/gpt-oss-20b
-  rate_limit: 40
+  ocr:          { provider: groq, model: meta-llama/llama-4-scout-17b-16e-instruct }
+default_provider: groq
+providers:
+  groq:
+    base_url: https://api.groq.com/openai/v1
+    auth_env: GROQ_API_KEY
+    fallback_model: openai/gpt-oss-20b
+    rate_limit: 40
+  cerebras:
+    base_url: https://api.cerebras.ai/v1
+    auth_env: CEREBRAS_API_KEY
+    fallback_model: gpt-oss-120b
+    rate_limit: 20
 thresholds:
   max_verify_steps: 6
   verify_budget_s: 75
