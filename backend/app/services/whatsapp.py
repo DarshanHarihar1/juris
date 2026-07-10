@@ -51,11 +51,20 @@ def format_verdict(cards: list[dict]) -> str:
     for c in cards:
         emoji = _EMOJI.get(c.get("verdict", ""), "❓")
         expl = _E_TAG.sub("", c.get("explanation_native") or "").strip()
-        blocks.append(
-            f"{emoji} {c.get('verdict')}: {c.get('one_liner_native')}\n\n"
-            f"{expl}\n\nRead the full verdict: {base}/v/{c.get('slug')}"
+        claim_text = c.get("claim_native") or c.get("claim_en") or ""
+        one_liner = c.get("one_liner_native") or ""
+        verdict_word = c.get("verdict") or ""
+        verdict_line = (
+            f"{emoji} {verdict_word} — {one_liner}"
+            if one_liner.strip().upper() != verdict_word.strip().upper() and one_liner
+            else f"{emoji} {verdict_word}"
         )
-    return ("\n\n———\n\n".join(blocks) + "\n\nReply 'R' for a short message you can forward.").strip()
+        claim_line = f'🔍 *"{claim_text}"*\n\n' if claim_text else ""
+        blocks.append(
+            f"{claim_line}{verdict_line}\n\n"
+            f"{expl}\n\nFull verdict: {base}/v/{c.get('slug')}"
+        )
+    return "\n\n———\n\n".join(blocks).strip()
 
 
 class TwilioWhatsApp:
