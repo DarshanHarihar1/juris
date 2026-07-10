@@ -35,6 +35,37 @@ def test_format_single_no_llm():
     assert "https://pib.gov.in/cm" in out.rebuttal_card_native
 
 
+async def test_localize_translates_and_keeps_url(monkeypatch):
+    async def fake_call(role, messages, response_schema=None):
+        assert "hi" in messages[0]["content"]  # language carried into the prompt
+        return MeshResponse(text="", model="m", parsed=synth.SummaryOutput(
+            explanation="यह दावा झूठा है। स्रोत: https://x.com/a"))
+
+    monkeypatch.setattr(synth.mesh, "call", fake_call)
+    base = synth.SynthOutput(
+        one_liner_native="FALSE.",
+        explanation_native="This claim is false.",
+        rebuttal_card_native="This claim is false.",
+    )
+    out = await synth._localize(base, "hi", "https://x.com/a")
+    assert "झूठा" in out.explanation_native
+    assert "https://x.com/a" in out.rebuttal_card_native
+
+
+async def test_localize_falls_back_to_english_on_error(monkeypatch):
+    async def boom(*a, **k):
+        raise RuntimeError("mesh down")
+
+    monkeypatch.setattr(synth.mesh, "call", boom)
+    base = synth.SynthOutput(
+        one_liner_native="FALSE.",
+        explanation_native="This claim is false.",
+        rebuttal_card_native="This claim is false.",
+    )
+    out = await synth._localize(base, "hi", None)
+    assert out.explanation_native == "This claim is false."
+
+
 async def test_single_claim_verdict_stage_skips_mesh(monkeypatch):
     calls = []
 

@@ -29,6 +29,11 @@ Write in the user's language ({lang}):
 
 Return ONLY JSON: {{"explanation":"..."}}"""
 
+LOCALIZE_SYSTEM = """Translate this fact-check explanation into the user's language ({lang}).
+Keep the meaning exact and preserve any URLs verbatim. Plain text only.
+
+Return ONLY JSON: {{"explanation":"..."}}"""
+
 
 class SummaryOutput(BaseModel):
     explanation: str
@@ -112,12 +117,37 @@ def _concat_fallback(parts: list[VerifiedPart], combined: str) -> str:
 
 
 def format_single(scv: SubClaimVerdict) -> SynthOutput:
-    """N=1: no LLM — thin template over verify output."""
+    """N=1: no LLM — thin template over verify output. English stays LLM-free;
+    non-English is localized separately in verdict_stage (see _localize)."""
     urls = list(scv.evidence)
     return SynthOutput(
         one_liner_native=f"{to_db_verdict(scv.verdict)}.",
         explanation_native=scv.explanation.strip(),
         rebuttal_card_native=_enforce_rebuttal(scv.explanation, urls[0] if urls else None),
+    )
+
+
+async def _localize(out: SynthOutput, lang: str, fallback_url: str | None) -> SynthOutput:
+    """Translate the single-claim explanation into `lang` so a Hindi (etc.) forward
+    gets a reply in the same language. One small call; on error keep the English."""
+    try:
+        resp = await mesh.call(
+            "synthesizer",
+            [
+                {"role": "system", "content": LOCALIZE_SYSTEM.format(lang=lang)},
+                {"role": "user", "content": out.explanation_native},
+            ],
+            response_schema=SummaryOutput,
+        )
+        text = resp.parsed.explanation.strip() if resp.parsed else ""
+    except Exception:
+        text = ""
+    if not text:
+        return out
+    return SynthOutput(
+        one_liner_native=out.one_liner_native,
+        explanation_native=text,
+        rebuttal_card_native=_enforce_rebuttal(text, fallback_url),
     )
 
 
@@ -217,6 +247,9 @@ async def verdict_stage(
 
     if len(parts) == 1:
         out = format_single(parts[0].scv)
+        if (lang or "en") != "en":
+            urls = list(parts[0].scv.evidence)
+            out = await _localize(out, lang, urls[0] if urls else None)
         claim_en = parts[0].sub_claim
         claim_native = parts[0].sub_claim
     else:
