@@ -59,10 +59,10 @@ export default function Home() {
       <div className="flex flex-1 items-center justify-center px-6">
         <div className="-mt-16 w-full max-w-xl">
           <h1 className="font-serif text-4xl font-semibold leading-tight tracking-tight sm:text-5xl">
-            Rumor ends here<span className="text-verdict-false">.</span>
+            rumor ends here<span className="text-verdict-false">.</span>
           </h1>
           <p className="mt-3 text-muted">
-            Paste any forward. Get a verdict with receipts.
+            don&rsquo;t forward it. verify it.
           </p>
 
           <div
@@ -107,7 +107,9 @@ export default function Home() {
                   }
                 }}
                 placeholder={
-                  mode === "url" ? "Paste a link to an article…" : "Paste the claim here…"
+                  mode === "url"
+                    ? "paste a link to an article…"
+                    : "paste the message everyone's forwarding…"
                 }
                 rows={3}
                 autoFocus
@@ -116,10 +118,7 @@ export default function Home() {
               />
             )}
 
-            <div className="flex items-center justify-between gap-4 px-3 pb-3">
-              <span className="font-mono text-[11px] text-muted/60">
-                press <kbd className="rounded border border-line px-1">Enter</kbd> to verify
-              </span>
+            <div className="flex items-center justify-end px-3 pb-3">
               <button
                 onClick={submit}
                 disabled={loading || !content}

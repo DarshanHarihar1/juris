@@ -117,11 +117,13 @@ def _assistant_message(msg) -> dict:
 
 
 def _safe_summary(text: str | None) -> str:
-    summary = "Choosing the next verification step."
-    if text:
-        summary = " ".join(text.strip().split())
-        for marker in ("Action:", "Tool:", "\n"):
-            summary = summary.split(marker, 1)[0].strip() or summary
+    # Empty when the model sent a bare tool call — the UI shows the query instead
+    # of a filler sentence.
+    if not text:
+        return ""
+    summary = " ".join(text.strip().split())
+    for marker in ("Action:", "Tool:", "\n"):
+        summary = summary.split(marker, 1)[0].strip() or summary
     return summary[:240]
 
 

@@ -88,13 +88,13 @@ function VerifyStepRow({ entry }: { entry: VerifyStep }) {
           {settled ? "Settled" : "Searching"}
         </span>
       </div>
-      {entry.thought_summary && (
-        <p className="mt-2 text-sm leading-relaxed text-ink/85">{entry.thought_summary}</p>
-      )}
       {entry.query && (
-        <div className="mt-2 rounded-md bg-paper px-3 py-2 font-mono text-xs text-muted">
-          {entry.query}
-        </div>
+        <p className="mt-2 text-sm leading-relaxed text-ink/85">
+          Searched <span className="font-mono text-xs">“{entry.query}”</span>
+        </p>
+      )}
+      {entry.thought_summary && (
+        <p className="mt-2 text-sm leading-relaxed text-muted">{entry.thought_summary}</p>
       )}
     </div>
   );

@@ -5,21 +5,17 @@ import { RebuttalCard } from "./RebuttalCard";
 export function VerdictCardView({ card }: { card: VerdictCard }) {
   return (
     <div className="rounded-2xl border border-line bg-white p-6 animate-fade-up">
-      <div className="flex flex-wrap items-center gap-4">
-        {/* rubber-stamp verdict mark */}
+      <div className="flex flex-wrap items-baseline gap-4">
+        {/* rubber-stamp verdict mark — the headline itself */}
         <span
-          className={`inline-block rounded border-2 px-3 py-1 font-mono text-sm font-bold
-                      uppercase tracking-widest animate-stamp
+          className={`inline-block rounded-md border-[3px] px-4 py-1.5 font-mono text-2xl
+                      font-bold uppercase tracking-widest animate-stamp
                       ${VERDICT_BORDER[card.verdict]} ${VERDICT_COLOR[card.verdict]}`}
         >
           {card.verdict.replace(/_/g, " ")}
         </span>
         <span className="font-mono text-xs text-muted">{card.confidence}% confidence</span>
       </div>
-
-      <h2 className="mt-4 font-serif text-2xl font-semibold leading-snug tracking-tight">
-        {card.one_liner_native}
-      </h2>
       {card.explanation_native && (
         <p className="mt-3 text-[15px] leading-relaxed text-ink/85">
           {withCites(card.explanation_native)}
