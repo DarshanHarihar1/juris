@@ -54,9 +54,10 @@ def format_verdict(cards: list[dict]) -> str:
         claim_text = c.get("claim_native") or c.get("claim_en") or ""
         one_liner = c.get("one_liner_native") or ""
         verdict_word = c.get("verdict") or ""
+        one_liner_stripped = one_liner.strip().rstrip(".!").upper()
         verdict_line = (
             f"{emoji} {verdict_word} — {one_liner}"
-            if one_liner.strip().upper() != verdict_word.strip().upper() and one_liner
+            if one_liner and one_liner_stripped != verdict_word.strip().upper()
             else f"{emoji} {verdict_word}"
         )
         claim_line = f'🔍 *"{claim_text}"*\n\n' if claim_text else ""
