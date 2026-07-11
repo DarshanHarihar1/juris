@@ -7,7 +7,9 @@ manipulation-technique tags, and a polite forwardable rebuttal at a permalink.
 
 **Live:**
 - App: https://juris-eta.vercel.app
-- API: https://juris-web.onrender.com (`GET /health`)
+
+**Examples:** see [EXAMPLES.md](EXAMPLES.md) — real text and image claims with
+links to their live investigations and verdicts.
 
 ---
 
