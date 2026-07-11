@@ -209,14 +209,9 @@ export default function TrialPage({ params }: { params: { id: string } }) {
             )}
 
             {!terminal && (
-              <>
-                <p className="mt-4 font-mono text-xs text-muted animate-pulse-soft">
-                  {activity}
-                </p>
-                <div className="mt-3 h-0.5 overflow-hidden rounded-full bg-line">
-                  <div className="h-full w-1/4 rounded-full bg-ink animate-sweep" />
-                </div>
-              </>
+              <p className="mt-4 font-mono text-xs text-muted animate-pulse-soft">
+                {activity}
+              </p>
             )}
 
             {terminal && (
