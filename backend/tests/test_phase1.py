@@ -69,6 +69,48 @@ async def test_s0_image_ocr(monkeypatch):
     assert await s0_intake.intake("image", None, "not-an-image") == ""
 
 
+async def test_s0_image_ocr_twilio_media(monkeypatch):
+    from app.pipeline import s0_intake
+
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "ACtest")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "tok")
+
+    class _Resp:
+        content = b"\xff\xd8\xff"
+        headers = {"content-type": "image/jpeg"}
+
+        def raise_for_status(self):
+            return None
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, auth=None):
+            assert "api.twilio.com" in url
+            assert auth == ("ACtest", "tok")
+            return _Resp()
+
+    seen = {}
+
+    async def _fake_chat(model, messages):
+        seen["url"] = messages[0]["content"][1]["image_url"]["url"]
+        return type("M", (), {"content": "COCKROACH JANTA PARTY followers"})()
+
+    monkeypatch.setattr(s0_intake.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(s0_intake.mesh, "chat", _fake_chat)
+    twilio_url = "https://api.twilio.com/2010-04-01/Accounts/AC/Messages/MM/Media/ME"
+    out = await s0_intake.intake("image", None, twilio_url)
+    assert out == "COCKROACH JANTA PARTY followers"
+    assert seen["url"].startswith("data:image/jpeg;base64,")
+
+
 # --- language detect (no LLM) --------------------------------------------------
 def test_detect_language_no_mesh():
     from app.pipeline import s1_normalize

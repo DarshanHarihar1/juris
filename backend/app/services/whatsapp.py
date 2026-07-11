@@ -8,6 +8,7 @@ import hashlib
 import os
 import re
 from dataclasses import dataclass
+from typing import Literal
 
 import httpx
 
@@ -16,6 +17,7 @@ from ..config import public_base_url
 _TWILIO_MSGS = "https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
 _E_TAG = re.compile(r"\s*\[e:[^\]]+\]")   # citation tags — stripped for the forwardable text
 _EMOJI = {"TRUE": "✅", "FALSE": "❌", "MISLEADING": "⚠️", "CONFLICTING": "⚠️", "UNVERIFIABLE": "❓"}
+MediaType = Literal["text", "image", "url"]
 
 
 @dataclass
@@ -23,8 +25,10 @@ class InboundMsg:
     """Provider-agnostic inbound message. Both adapters parse down to this shape."""
     wa_id: str        # digits only, no prefix — the stable per-user id (hash before storing)
     reply_to: str     # channel address to reply to, e.g. "whatsapp:+91..."
-    text: str
+    text: str         # Body / caption (may be empty when media-only)
     msg_sid: str      # provider message id — idempotency key (providers retry on timeout)
+    media_type: MediaType = "text"
+    media_uri: str | None = None  # Twilio MediaUrl0, web data URL, etc.
 
 
 def hash_waid(wa_id: str) -> str:
@@ -73,9 +77,23 @@ class TwilioWhatsApp:
 
     def parse_inbound(self, form: dict) -> InboundMsg:
         frm = form.get("From", "")
+        body = (form.get("Body") or "").strip()
+        media_type: MediaType = "text"
+        media_uri = None
+        try:
+            num_media = int(form.get("NumMedia") or "0")
+        except ValueError:
+            num_media = 0
+        if num_media > 0:
+            url = (form.get("MediaUrl0") or "").strip()
+            ctype = (form.get("MediaContentType0") or "").lower()
+            if url and ctype.startswith("image/"):
+                media_type = "image"
+                media_uri = url
         return InboundMsg(
             wa_id=form.get("WaId", ""), reply_to=frm,
-            text=(form.get("Body") or "").strip(), msg_sid=form.get("MessageSid", ""),
+            text=body, msg_sid=form.get("MessageSid", ""),
+            media_type=media_type, media_uri=media_uri,
         )
 
     async def send(self, reply_to: str, body: str) -> None:
@@ -96,9 +114,20 @@ class MetaWhatsApp:
     def parse_inbound(self, payload: dict) -> InboundMsg:
         msg = payload["entry"][0]["changes"][0]["value"]["messages"][0]
         wa_id = msg.get("from", "")
+        media_type: MediaType = "text"
+        media_uri = None
+        text = ""
+        if msg.get("type") == "image":
+            media_type = "image"
+            # Meta media ids need a Graph API fetch — wire when Cloud API lands.
+            media_uri = msg.get("image", {}).get("id")
+            text = (msg.get("image", {}).get("caption") or "").strip()
+        else:
+            text = (msg.get("text", {}).get("body") or "").strip()
         return InboundMsg(
             wa_id=wa_id, reply_to=f"whatsapp:+{wa_id}",
-            text=(msg.get("text", {}).get("body") or "").strip(), msg_sid=msg.get("id", ""),
+            text=text, msg_sid=msg.get("id", ""),
+            media_type=media_type, media_uri=media_uri,
         )
 
     async def send(self, reply_to: str, body: str) -> None:  # pragma: no cover

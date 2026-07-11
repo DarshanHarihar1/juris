@@ -161,9 +161,10 @@ async def whatsapp_webhook(request: Request):
             job_id = await con.fetchval("select job_id from wa_inbound where message_sid = $1", msg.msg_sid)
             if job_id is None:
                 submission_id = await con.fetchval(
-                    """insert into submissions (channel, user_hash, media_type, raw_text, reply_to)
-                       values ('whatsapp', $1, 'text', $2, $3) returning id""",
-                    whatsapp.hash_waid(msg.wa_id), msg.text, msg.reply_to)
+                    """insert into submissions (channel, user_hash, media_type, raw_text, media_uri, reply_to)
+                       values ('whatsapp', $1, $2, $3, $4, $5) returning id""",
+                    whatsapp.hash_waid(msg.wa_id), msg.media_type,
+                    msg.text or None, msg.media_uri, msg.reply_to)
                 job_id = await con.fetchval(
                     "insert into jobs (submission_id) values ($1) returning id", submission_id)
                 await con.execute(

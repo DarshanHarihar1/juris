@@ -19,6 +19,23 @@ def test_twilio_and_meta_parse_to_same_shape():
     assert tw.wa_id == meta.wa_id == "919876543210"
     assert tw.text == meta.text == "Claim"          # Body is trimmed
     assert tw.reply_to == meta.reply_to == "whatsapp:+919876543210"
+    assert tw.media_type == meta.media_type == "text"
+    assert tw.media_uri is None and meta.media_uri is None
+
+
+def test_twilio_image_parse():
+    tw = whatsapp.TwilioWhatsApp().parse_inbound({
+        "WaId": "919876543210",
+        "From": "whatsapp:+919876543210",
+        "Body": "",
+        "MessageSid": "SM2",
+        "NumMedia": "1",
+        "MediaUrl0": "https://api.twilio.com/2010-04-01/Accounts/AC/Messages/MM/Media/ME",
+        "MediaContentType0": "image/jpeg",
+    })
+    assert tw.media_type == "image"
+    assert tw.media_uri == "https://api.twilio.com/2010-04-01/Accounts/AC/Messages/MM/Media/ME"
+    assert tw.text == ""
 
 
 def test_hash_is_salted_stable_and_leaks_no_raw_id():
