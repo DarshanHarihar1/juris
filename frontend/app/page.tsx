@@ -130,7 +130,20 @@ export default function Home() {
             </div>
           </div>
 
-          {mode === "text" && (
+          {/* Motion during the POST + cold-start wait, so this frame never
+              freezes — keeps demo cuts here invisible. Mirrors the trial page. */}
+          {loading && (
+            <div className="mt-4">
+              <p className="font-mono text-xs text-muted animate-pulse-soft">
+                filing report…
+              </p>
+              <div className="mt-3 h-0.5 overflow-hidden rounded-full bg-line">
+                <div className="h-full w-1/4 rounded-full bg-ink animate-sweep" />
+              </div>
+            </div>
+          )}
+
+          {mode === "text" && !loading && (
             <div className="mt-4 flex flex-wrap gap-2">
               {SAMPLES.map((s, i) => (
                 <button
