@@ -1,7 +1,7 @@
-"""Stage 1 — Normalize: in-process language detect + one LLM extract/decompose.
+"""Stage 1 — Normalize: one LLM extract/decompose, then in-process language detect.
 
-Output: `{ language, sub_claims }`. No grounding / claim_type / volatility /
-checkworthiness. Grounding (`Today is <as-of-date>`) lives in Verify (Phase 3).
+Language is detected on cleaned sub-claims (not raw intake/OCR) so noisy upstream
+text does not mislead langdetect. Output: `{ language, sub_claims }`.
 """
 from langsmith import traceable
 
@@ -58,7 +58,6 @@ def detect_language(text: str, hint: str | None = None) -> str:
 
 @traceable(name="normalize")
 async def normalize(text: str, lang_hint: str | None = None) -> NormalizerOutput:
-    language = detect_language(text, lang_hint)
     resp = await mesh.call(
         "normalizer",
         [
@@ -69,4 +68,7 @@ async def normalize(text: str, lang_hint: str | None = None) -> NormalizerOutput
     )
     assert resp.parsed is not None
     raw = [c.strip() for c in resp.parsed.sub_claims if c and c.strip()]
-    return NormalizerOutput(language=language, sub_claims=raw[:MAX_SUB_CLAIMS])
+    sub_claims = raw[:MAX_SUB_CLAIMS]
+    # Detect on cleaned sub-claims, not raw intake (OCR ALL-CAPS etc. misleads langdetect).
+    language = detect_language(" ".join(sub_claims), lang_hint) if sub_claims else "en"
+    return NormalizerOutput(language=language, sub_claims=sub_claims)

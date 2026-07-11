@@ -78,6 +78,43 @@ def test_detect_language_no_mesh():
     assert s1_normalize.detect_language("") == "en"
 
 
+def test_detect_language_ocr_caps_misdetects():
+    from app.pipeline import s1_normalize
+
+    ocr = (
+        "COCKROACH Janta PARTY INSTAGRAM FOLLOWERS FOLLOWER DISTRIBUTION BY COUNTRY "
+        "Pakistan 49% USA 14% Bangladesh 14% India 9% UK 3% Australia 3% Saudi Arabia 2%"
+    )
+    clean = (
+        "Cockroach Janta Party Instagram followers distribution by country: "
+        "Pakistan 49%, USA 14%, Bangladesh 14%, India 9%, UK 3%, Australia 3%, Saudi Arabia 2%."
+    )
+    assert s1_normalize.detect_language(ocr) == "id"
+    assert s1_normalize.detect_language(clean) == "en"
+
+
+async def test_normalize_language_from_sub_claims_not_raw_ocr(monkeypatch):
+    from app.models import ExtractOutput
+    from app.pipeline import s1_normalize
+
+    ocr = (
+        "COCKROACH Janta PARTY INSTAGRAM FOLLOWERS FOLLOWER DISTRIBUTION BY COUNTRY "
+        "Pakistan 49% USA 14% Bangladesh 14% India 9% UK 3% Australia 3% Saudi Arabia 2%"
+    )
+    cleaned = (
+        "Cockroach Janta Party Instagram followers distribution by country: "
+        "Pakistan 49%, USA 14%, Bangladesh 14%, India 9%, UK 3%, Australia 3%, Saudi Arabia 2%."
+    )
+
+    async def fake_call(*a, **k):
+        return type("Resp", (), {"parsed": ExtractOutput(sub_claims=[cleaned])})()
+
+    monkeypatch.setattr(s1_normalize.mesh, "call", fake_call)
+    out = await s1_normalize.normalize(ocr)
+    assert out.language == "en"
+    assert out.sub_claims == [cleaned]
+
+
 async def test_normalize_one_llm_call_and_schema(monkeypatch):
     from app.models import ExtractOutput, NormalizerOutput
     from app.pipeline import s1_normalize
