@@ -1,5 +1,6 @@
 # Ping juris-searxng every 14 min — Render free tier spins down after ~15 min idle.
-# Cold wake takes ~35s; retry 502s like the backend warm_searxng() path.
+# Hit the root HTML page only (not /search) so warm-ups don't burn engine quotas /
+# get Brave/DDG CAPTCHA'd. Cold wake takes ~35s; retry 502s like warm_searxng().
 # Optional repo secret SEARXNG_PING_URL overrides the default public URL.
 name: searxng-warm
 on:
@@ -15,7 +16,7 @@ jobs:
         env:
           SEARXNG_PING_URL: ${{ secrets.SEARXNG_PING_URL }}
         run: |
-          URL="${SEARXNG_PING_URL:-https://juris-searxng.onrender.com/search?q=ping&format=json}"
+          URL="${SEARXNG_PING_URL:-https://juris-searxng.onrender.com/}"
           for i in 1 2 3 4; do
             code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 90 "$URL")
             echo "attempt $i: HTTP $code"

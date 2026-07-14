@@ -326,7 +326,7 @@ down after ~15 min idle and Supabase auto-pauses a project after 7 days idle.
 | Workflow | Schedule | Purpose |
 |---|---|---|
 | `health-cron.yml` | daily, 06:00 UTC | Curls `juris-web`'s `/health`; keeps Supabase from auto-pausing and warms the Render web service. Reads the `HEALTH_URL` repo secret. |
-| `searxng-warm.yml` | every 14 min | Curls SearXNG with a throwaway query, retrying up to 4× on cold-start 502s. Reads the optional `SEARXNG_PING_URL` repo secret (defaults to the public SearXNG URL). |
+| `searxng-warm.yml` | every 14 min | Curls SearXNG `/` (not `/search`) to keep the free-tier instance awake without burning engine quotas; retries up to 4× on cold-start 502s. Optional `SEARXNG_PING_URL` repo secret overrides the default. |
 
 Both also support `workflow_dispatch` for a manual run from the Actions tab.
 

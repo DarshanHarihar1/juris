@@ -123,20 +123,46 @@ async def _searxng_get(
 
 
 async def warm_searxng() -> bool:
-    """Pre-wake SearXNG on cold Render free tier before verify searches run."""
+    """Pre-wake SearXNG on cold Render free tier before verify searches run.
+
+    Hits `/` only — `/search` burns upstream engine quotas and CAPTCHA's the
+    shared Render IP (Brave 429, DDG/Startpage CAPTCHA).
+    """
     base = _searxng_base()
     if not base:
         log.warning("warm_searxng skipped: SEARXNG_URL is unset")
         return False
-    results = await _searxng_get(
-        {"q": "test", "format": "json"},
-        timeout=_WAKE_TIMEOUT,
-        max_attempts=_WAKE_ATTEMPTS,
-        retry_delay=_WAKE_RETRY_DELAY,
-    )
-    if results is not None:
-        log.info("SearXNG warm ok base=%s", base)
-        return True
+    url = f"{base}/"
+    for attempt in range(1, _WAKE_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(timeout=_WAKE_TIMEOUT) as c:
+                r = await c.get(url)
+                if r.status_code in _RETRY_STATUS and attempt < _WAKE_ATTEMPTS:
+                    log.warning(
+                        "SearXNG warm HTTP %s url=%s attempt=%d/%d, retrying in %.0fs",
+                        r.status_code, url, attempt, _WAKE_ATTEMPTS, _WAKE_RETRY_DELAY,
+                    )
+                    await asyncio.sleep(_WAKE_RETRY_DELAY)
+                    continue
+                r.raise_for_status()
+                log.info("SearXNG warm ok base=%s", base)
+                return True
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            if attempt < _WAKE_ATTEMPTS:
+                log.warning(
+                    "SearXNG warm failed url=%s attempt=%d/%d, retrying in %.0fs: %s",
+                    url, attempt, _WAKE_ATTEMPTS, _WAKE_RETRY_DELAY, exc,
+                )
+                await asyncio.sleep(_WAKE_RETRY_DELAY)
+                continue
+            log.warning("SearXNG warm failed base=%s: %s", base, exc)
+            return False
+        except httpx.HTTPStatusError as exc:
+            log.warning(
+                "SearXNG warm HTTP %s base=%s: %s",
+                exc.response.status_code, base, exc,
+            )
+            return False
     log.warning("SearXNG warm failed base=%s", base)
     return False
 

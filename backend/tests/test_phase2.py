@@ -194,14 +194,13 @@ async def test_web_search_retries_502(monkeypatch):
 async def test_warm_searxng_ok(monkeypatch):
     from app.services import search
 
+    seen: dict = {}
+
     class _Resp:
         status_code = 200
 
         def raise_for_status(self):
             return None
-
-        def json(self):
-            return {"results": []}
 
     class _Client:
         def __init__(self, *args, **kwargs):
@@ -214,12 +213,16 @@ async def test_warm_searxng_ok(monkeypatch):
             return False
 
         async def get(self, url, params=None):
+            seen["url"] = url
+            seen["params"] = params
             return _Resp()
 
     monkeypatch.setenv("SEARXNG_URL", "https://searx.example")
     monkeypatch.setattr(search.httpx, "AsyncClient", _Client)
 
     assert await search.warm_searxng() is True
+    assert seen["url"] == "https://searx.example/"
+    assert seen["params"] is None
 
 
 async def test_web_search_unwraps_google_redirect_urls(monkeypatch):
