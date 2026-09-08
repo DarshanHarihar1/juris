@@ -13,7 +13,7 @@ from urllib.parse import parse_qs
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import config, db, worker
 from .services import jobs, whatsapp
@@ -52,7 +52,9 @@ async def health():
 
 class VerifyBody(BaseModel):
     type: Literal["text", "image", "audio", "url"]
-    content: str
+    # 50k chars is generous for a data:image URL while keeping a single request
+    # from bloating submissions.raw_text/media_uri or worker memory.
+    content: str = Field(max_length=50_000)
     lang_hint: str | None = None
 
 

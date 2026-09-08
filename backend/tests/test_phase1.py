@@ -30,6 +30,9 @@ async def test_api_contract():
         await media()
     assert e.value.status_code == 501
 
+    with pytest.raises(ValidationError):
+        VerifyBody(type="text", content="x" * 50_001)
+
 
 # --- S0 intake -----------------------------------------------------------------
 async def test_s0_url_strips_html(monkeypatch):
