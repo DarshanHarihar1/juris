@@ -66,3 +66,42 @@ def test_ack_twiml_escapes_and_wraps():
     xml = whatsapp.ack_twiml("watch <it> & win")
     assert xml.startswith("<?xml") and "<Message>" in xml
     assert "&lt;it&gt;" in xml and "&amp;" in xml            # payload escaped, not raw
+
+
+def _sign(token: str, url: str, form: dict) -> str:
+    import base64
+    import hashlib
+    import hmac as hmac_mod
+    data = url + "".join(k + form[k] for k in sorted(form))
+    return base64.b64encode(hmac_mod.new(token.encode(), data.encode(), hashlib.sha1).digest()).decode()
+
+
+def test_verify_twilio_signature_accepts_valid(monkeypatch):
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "test-token")
+    url = "https://juris-web.onrender.com/webhooks/whatsapp"
+    form = {"Body": "hi", "From": "whatsapp:+919876543210", "WaId": "919876543210"}
+    sig = _sign("test-token", url, form)
+    assert whatsapp.verify_twilio_signature(url, form, sig) is True
+
+
+def test_verify_twilio_signature_rejects_mismatch(monkeypatch):
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "test-token")
+    url = "https://juris-web.onrender.com/webhooks/whatsapp"
+    form = {"Body": "hi"}
+    sig = _sign("wrong-token", url, form)
+    assert whatsapp.verify_twilio_signature(url, form, sig) is False
+
+
+def test_verify_twilio_signature_rejects_missing_signature(monkeypatch):
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "test-token")
+    url = "https://juris-web.onrender.com/webhooks/whatsapp"
+    assert whatsapp.verify_twilio_signature(url, {"Body": "hi"}, None) is False
+    assert whatsapp.verify_twilio_signature(url, {"Body": "hi"}, "") is False
+
+
+def test_verify_twilio_signature_rejects_when_token_unset(monkeypatch):
+    monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
+    url = "https://juris-web.onrender.com/webhooks/whatsapp"
+    form = {"Body": "hi"}
+    sig = _sign("any-token", url, form)
+    assert whatsapp.verify_twilio_signature(url, form, sig) is False

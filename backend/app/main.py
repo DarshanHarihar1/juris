@@ -140,6 +140,9 @@ async def whatsapp_webhook(request: Request):
     ponytail: stdlib parse_qs handles the form-encoded body (no python-multipart dep). Raw
     wa_id/From are used here but never logged or persisted un-hashed (§35)."""
     form = {k: v[0] for k, v in parse_qs((await request.body()).decode()).items()}
+    if not whatsapp.verify_twilio_signature(
+            str(request.url), form, request.headers.get("x-twilio-signature")):
+        raise HTTPException(403, "invalid twilio signature")
     msg = whatsapp.adapter.parse_inbound(form)
 
     # "R" → forwardable rebuttal for this user's most recent verdict, replied inline via TwiML.
