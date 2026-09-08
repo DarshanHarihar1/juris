@@ -4,7 +4,9 @@ behind an adapter so Twilio (sandbox demo) can be swapped for the Meta Cloud API
 Privacy (non-negotiable, §35): only a salted hash of wa_id is ever stored/logged. The
 raw reply address lives on `submissions.reply_to` for the in-flight job and is nulled
 after the verdict is sent — it never reaches events_log (which the public UI reads)."""
+import base64
 import hashlib
+import hmac
 import os
 import re
 from dataclasses import dataclass
@@ -37,6 +39,18 @@ def hash_waid(wa_id: str) -> str:
     if not salt:
         raise RuntimeError("WA_HASH_SALT not set — refusing to store an unsalted wa_id")
     return hashlib.sha256((salt + wa_id).encode()).hexdigest()
+
+
+def verify_twilio_signature(url: str, form: dict, signature: str | None) -> bool:
+    """Twilio request-validation scheme: HMAC-SHA1 of the URL + sorted form params,
+    base64-encoded, keyed on TWILIO_AUTH_TOKEN (https://www.twilio.com/docs/usage/security
+    #validating-requests). Missing token or signature, or a mismatch, is rejected."""
+    token = os.environ.get("TWILIO_AUTH_TOKEN")
+    if not token or not signature:
+        return False
+    data = url + "".join(k + form[k] for k in sorted(form))
+    expected = base64.b64encode(hmac.new(token.encode(), data.encode(), hashlib.sha1).digest())
+    return hmac.compare_digest(expected, signature.encode())
 
 
 def ack_twiml(message: str) -> str:
