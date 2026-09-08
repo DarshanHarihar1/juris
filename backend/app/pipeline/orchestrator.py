@@ -105,13 +105,14 @@ async def run(job: dict) -> None:
                 await whatsapp.deliver_text(con, submission_id, sub["reply_to"], msg)
             return
 
-        await warm_task
+    await warm_task
 
-        parts = list(await asyncio.gather(*[
-            _verify_one(job_id, submission_id, text, sc, norm.language)
-            for sc in norm.sub_claims
-        ]))
+    parts = list(await asyncio.gather(*[
+        _verify_one(job_id, submission_id, text, sc, norm.language)
+        for sc in norm.sub_claims
+    ]))
 
+    async with (await pool()).acquire() as con:
         await synthesize.verdict_stage(
             con,
             job_id,
