@@ -1,7 +1,8 @@
 """Synthesis tests retained for v2 (Phase 1 stub).
 
 Offline tests exercise VerdictCard assembly via build_card(): rebuttal <=400 + URL,
-slug/models_used. Citation-lock and manipulation-tag whitelist were removed.
+slug/models_used, and the deterministic manipulation-tag keyword scan. Citation-lock
+whitelist was removed.
 """
 import json
 
@@ -42,6 +43,16 @@ def test_build_card_keeps_explanation():
     card = synth.build_card("cid-1", "claim en", "claim native", "FALSE", 90, "verify", EV, out)
     assert "wall is not visible" in card.explanation_native
     assert card.manipulation_tags == []
+
+
+def test_build_card_detects_manipulation_tags():
+    out = SynthOutput(
+        one_liner_native="Yeh dava galat hai.",
+        explanation_native="Share this immediately before it's deleted, this deadly virus can kill you.",
+        rebuttal_card_native="Galat dava. https://altnews.in/x")
+    card = synth.build_card("cid-2", "claim en", "claim native", "FALSE", 90, "verify", EV, out)
+    assert "fear appeal" in card.manipulation_tags
+    assert "false urgency" in card.manipulation_tags
 
 
 def test_rebuttal_constraints():
