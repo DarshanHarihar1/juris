@@ -17,6 +17,23 @@ from ..services import events, mesh
 
 REBUTTAL_MAX = 400
 
+MANIPULATION_PATTERNS: dict[str, list[str]] = {
+    "fear appeal": [
+        r"will die", r"can kill you", r"deadly", r"life[- ]threatening",
+        r"causes? cancer", r"toxic and dangerous",
+    ],
+    "false urgency": [
+        r"share (this )?(immediately|now)", r"forward (this )?(immediately|now)",
+        r"act now", r"before it('?s| is) (deleted|banned|removed)",
+        r"within \d+ hours?",
+    ],
+    "fabricated attribution": [
+        r"scientists (confirm|say|claim)", r"government (confirms|admits|announces)",
+        r"who (confirms|announces)", r"leaked (document|report)",
+        r"unnamed (officials|sources)",
+    ],
+}
+
 SUMMARY_SYSTEM = """You write a short WhatsApp-forwardable fact-check summary.
 
 The combined verdict label is already DECIDED by rules — do not change or soften it.
@@ -70,6 +87,13 @@ def confidence_for(verdict: str) -> int:
     return {"true": 80, "false": 80, "unverifiable": 40}.get(
         (verdict or "").strip().lower(), 40
     )
+
+
+def detect_manipulation_tags(*texts: str) -> list[str]:
+    """Deterministic keyword scan for common manipulation techniques. No LLM."""
+    blob = " ".join(t for t in texts if t).lower()
+    return [tag for tag, patterns in MANIPULATION_PATTERNS.items()
+            if any(re.search(p, blob) for p in patterns)]
 
 
 def _slug(text: str, claim_id) -> str:
@@ -208,7 +232,7 @@ def build_card(claim_id, claim_en, claim_native, verdict, confidence, path,
         verdict=verdict, confidence=confidence, one_liner_native=out.one_liner_native,
         explanation_native=out.explanation_native or "", evidence=ev_refs,
         rebuttal_card_native=rebuttal, path=path, models_used=_models_used(),
-        manipulation_tags=[],
+        manipulation_tags=detect_manipulation_tags(claim_en, claim_native, out.explanation_native),
     )
 
 
