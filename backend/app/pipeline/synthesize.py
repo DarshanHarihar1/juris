@@ -13,7 +13,7 @@ from pydantic import BaseModel, field_validator
 
 from ..config import role
 from ..models import EvidenceRef, SubClaimVerdict, SynthOutput, VerdictCard, to_db_verdict
-from ..services import events, mesh
+from ..services import credibility, events, mesh
 
 REBUTTAL_MAX = 400
 
@@ -219,12 +219,17 @@ async def summarize_multi(
 def build_card(claim_id, claim_en, claim_native, verdict, confidence, path,
                evidence: list[dict], out: SynthOutput) -> VerdictCard:
     """Assemble a VerdictCard. Pure (no I/O) for unit tests."""
-    ev_refs = [
-        EvidenceRef(url=e["url"], domain=e.get("domain") or _domain(e["url"]),
-                    stance=e.get("stance"),
-                    date=str(e["published_at"]) if e.get("published_at") else None)
-        for e in evidence[:5] if e.get("url")
-    ]
+    ev_refs = []
+    for e in evidence[:5]:
+        if not e.get("url"):
+            continue
+        domain = e.get("domain") or _domain(e["url"])
+        ev_refs.append(EvidenceRef(
+            url=e["url"], domain=domain, stance=e.get("stance"),
+            date=str(e["published_at"]) if e.get("published_at") else None,
+            credibility_tier=credibility.tier_for(domain),
+            credibility_score=credibility.score_for(domain),
+        ))
     path = path or "verify"
     rebuttal = _enforce_rebuttal(out.rebuttal_card_native, ev_refs[0].url if ev_refs else None)
     return VerdictCard(

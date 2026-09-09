@@ -100,6 +100,8 @@ class EvidenceRef(BaseModel):
     domain: str
     stance: str | None = None
     date: str | None = None
+    credibility_tier: int = 3
+    credibility_score: int = 30
 
 
 class SynthOutput(BaseModel):
