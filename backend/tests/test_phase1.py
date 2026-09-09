@@ -34,6 +34,18 @@ async def test_api_contract():
         VerifyBody(type="text", content="x" * 50_001)
 
 
+async def test_malformed_job_id_returns_404_not_500():
+    from app.main import job_events, job_stream
+
+    with pytest.raises(HTTPException) as e:
+        await job_events("not-a-uuid")
+    assert e.value.status_code == 404
+
+    with pytest.raises(HTTPException) as e:
+        await job_stream("not-a-uuid", request=None)
+    assert e.value.status_code == 404
+
+
 # --- S0 intake -----------------------------------------------------------------
 async def test_s0_url_strips_html(monkeypatch):
     from app.pipeline import s0_intake

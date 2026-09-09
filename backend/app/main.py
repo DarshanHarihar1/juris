@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import sys
+import uuid
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -81,6 +82,10 @@ async def verify(body: VerifyBody):
 async def job_events(job_id: str):
     """Ordered event log for a job. ponytail: plain JSON poll; the live investigation
     UI subscribes to events_log directly via Supabase Realtime (LLD §3.2)."""
+    try:
+        uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(404, "job not found")
     async with (await db.pool()).acquire() as con:
         rows = await con.fetch(
             "select id, event, data, created_at from events_log where job_id = $1::uuid order by id",
@@ -97,6 +102,10 @@ async def job_stream(job_id: str, request: Request):
     """SSE stream of events_log rows for the live investigation UI. Sets the SSE `id:`
     field so EventSource reconnects resume gaplessly via Last-Event-ID. Closes after
     a verdict/terminal event. ponytail: 500ms DB poll loop; LISTEN/NOTIFY if load matters."""
+    try:
+        uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(404, "job not found")
     last_event_id = request.headers.get("last-event-id", "")
     start_id = int(last_event_id) if last_event_id.isdigit() else 0
 
