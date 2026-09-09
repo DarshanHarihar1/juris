@@ -1,0 +1,19 @@
+# Domain credibility table (backend/app/services/credibility.py).
+# tier 1 = wire services / official bodies, tier 2 = reputable mainstream news.
+# Any domain not listed here falls back to services.credibility.DEFAULT_TIER.
+tier_1:
+  - reuters.com
+  - apnews.com
+  - afp.com
+  - pib.gov.in
+  - who.int
+  - un.org
+tier_2:
+  - bbc.com
+  - nytimes.com
+  - theguardian.com
+  - washingtonpost.com
+  - aljazeera.com
+  - thehindu.com
+  - ndtv.com
+  - indianexpress.com

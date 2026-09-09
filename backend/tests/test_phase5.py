@@ -78,6 +78,16 @@ def test_slug_and_models_used():
     assert {"prosecutor", "defense", "judge"}.isdisjoint(card.models_used)
 
 
+def test_build_card_attaches_credibility_tier():
+    out = SynthOutput(one_liner_native="x", explanation_native="ok.",
+                      rebuttal_card_native="https://pib.gov.in/y")
+    card = synth.build_card("cid-5", "c", "c", "FALSE", 80, "verify", EV, out)
+    by_domain = {e.domain: e for e in card.evidence}
+    assert by_domain["pib.gov.in"].credibility_tier == 1
+    assert by_domain["altnews.in"].credibility_tier == 3
+    assert by_domain["pib.gov.in"].credibility_score > by_domain["altnews.in"].credibility_score
+
+
 @needs_db
 async def test_persist_and_permalink(monkeypatch):
     from app import db
