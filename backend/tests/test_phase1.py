@@ -55,20 +55,85 @@ async def test_s0_url_strips_html(monkeypatch):
                 "<p>Reported&nbsp;today.</p></body></html>")
 
     class _Resp:
-        text = html_doc
+        headers = {"content-type": "text/html; charset=utf-8"}
+        encoding = "utf-8"
         def raise_for_status(self): pass
+        async def aiter_bytes(self):
+            yield html_doc.encode("utf-8")
+
+    class _StreamCtx:
+        async def __aenter__(self): return _Resp()
+        async def __aexit__(self, *a): return False
 
     class _Client:
         def __init__(self, *a, **k): pass
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
-        async def get(self, *a, **k): return _Resp()
+        def stream(self, method, url, **k): return _StreamCtx()
 
     monkeypatch.setattr(s0_intake.httpx, "AsyncClient", _Client)
     out = await s0_intake.intake("url", None, "https://example.com/mars")
     assert "NASA confirms water on Mars" in out
     assert "var y" not in out and "color:red" not in out
     assert "&nbsp;" not in out
+
+
+async def test_s0_url_rejects_non_html_content_type(monkeypatch):
+    from app.pipeline import s0_intake
+
+    class _Resp:
+        headers = {"content-type": "video/mp4"}
+        encoding = "utf-8"
+        def raise_for_status(self): pass
+        async def aiter_bytes(self):
+            assert False, "body must not be read when content-type is rejected"
+            yield b""  # pragma: no cover
+
+    class _StreamCtx:
+        async def __aenter__(self): return _Resp()
+        async def __aexit__(self, *a): return False
+
+    class _Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        def stream(self, method, url, **k): return _StreamCtx()
+
+    monkeypatch.setattr(s0_intake.httpx, "AsyncClient", _Client)
+    out = await s0_intake.intake("url", None, "https://example.com/huge.mp4")
+    assert out == ""
+
+
+async def test_s0_url_caps_fetch_at_max_bytes(monkeypatch):
+    from app.pipeline import s0_intake
+
+    chunk = b"a" * 50_000
+    n_chunks = 20  # 1,000,000 bytes total, well over _MAX_FETCH_BYTES (300,000)
+    read_count = {"n": 0}
+
+    class _Resp:
+        headers = {"content-type": "text/html"}
+        encoding = "utf-8"
+        def raise_for_status(self): pass
+        async def aiter_bytes(self):
+            for _ in range(n_chunks):
+                read_count["n"] += 1
+                yield chunk
+
+    class _StreamCtx:
+        async def __aenter__(self): return _Resp()
+        async def __aexit__(self, *a): return False
+
+    class _Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        def stream(self, method, url, **k): return _StreamCtx()
+
+    monkeypatch.setattr(s0_intake.httpx, "AsyncClient", _Client)
+    out = await s0_intake.intake("url", None, "https://example.com/huge.html")
+    assert read_count["n"] < n_chunks  # stopped early, didn't drain the whole stream
+    assert len(out) <= s0_intake._MAX_CHARS
 
 
 async def test_s0_image_ocr(monkeypatch):

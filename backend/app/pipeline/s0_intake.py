@@ -19,6 +19,8 @@ _SCRIPT_STYLE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.I | re.S)
 _TAGS = re.compile(r"<[^>]+>")
 _MAX_CHARS = 5000          # cap page/OCR text; S1 only needs the claim, not the whole article
 _FETCH_TIMEOUT = 12.0
+_MAX_FETCH_BYTES = 300_000  # cap streamed body before HTML-stripping; a huge or non-HTML
+                             # response (misserved as text/html) can't balloon worker memory
 
 _OCR_PROMPT = ("Transcribe ALL visible text in this image exactly, in reading order. "
               "Output only the transcribed text — no commentary, no description.")
@@ -38,15 +40,26 @@ async def intake(media_type: str, raw_text: str | None, media_uri: str | None) -
 
 async def _fetch_url_text(url: str) -> str:
     """GET the URL and strip HTML to text. Any failure → '' (never crash the job).
+    Streams the body with a byte cap and checks Content-Type before reading, so a
+    large or non-HTML response (e.g. a multi-hundred-MB file misserved as text/html)
+    is never pulled fully into memory.
     ponytail: regex de-tag, not a DOM parser — good enough to feed S1, which extracts
     the check-worthy claim from the noise. Add selectolax/readability if pages get messy."""
     if not url.startswith(("http://", "https://")):
         return ""
     try:
         async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=True) as c:
-            r = await c.get(url, headers={"User-Agent": "Mozilla/5.0 (JurisBot)"})
-            r.raise_for_status()
-            body = r.text
+            async with c.stream("GET", url, headers={"User-Agent": "Mozilla/5.0 (JurisBot)"}) as r:
+                r.raise_for_status()
+                ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
+                if ctype and not (ctype.startswith("text/") or ctype in ("application/xhtml+xml", "application/xml")):
+                    return ""
+                chunks = bytearray()
+                async for chunk in r.aiter_bytes():
+                    chunks += chunk
+                    if len(chunks) >= _MAX_FETCH_BYTES:
+                        break
+                body = chunks.decode(r.encoding or "utf-8", errors="ignore")
     except Exception:
         return ""
     body = _SCRIPT_STYLE.sub(" ", body)
