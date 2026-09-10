@@ -90,6 +90,19 @@ def test_temporal_guard_rejects_parametric_time_sensitive():
     assert v2._temporal_guard_ok("Water boils at 100C at sea level.", static) is True
 
 
+def test_canonical_url_unwraps_google_redirect():
+    from app.services.search import canonical_url
+
+    wrapped = "https://www.google.com/url?sa=t&url=https://pib.gov.in/press-release"
+    assert canonical_url(wrapped) == "https://pib.gov.in/press-release"
+
+    plain = "https://example.com/article"
+    assert canonical_url(plain) == plain
+
+    missing_param = "https://www.google.com/url?sa=t&q=karnataka"
+    assert canonical_url(missing_param) == missing_param
+
+
 def test_is_time_sensitive_heuristic():
     from app.services import search
 
