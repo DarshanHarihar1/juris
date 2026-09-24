@@ -12,6 +12,7 @@ import httpx
 import trafilatura
 
 from ..config import thresholds
+from . import credibility
 
 log = logging.getLogger("juris.search")
 
@@ -305,6 +306,7 @@ def _evidence_row(hit: dict, evidence_id: str, content: str | None = None, fetch
         "title": hit.get("title") or "",
         "published_at": hit.get("published_at"),
         "fetch_failed": fetch_failed,
+        "credibility_score": credibility.score_for(hit.get("domain", "")),
     }
     if content is not None:
         row["content"] = content
