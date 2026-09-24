@@ -237,6 +237,15 @@ def _is_office_holder_claim(claim) -> bool:
     return bool(_OFFICE_HOLDER_RE.search(text))
 
 
+def _needs_day_window(claim) -> bool:
+    """True only for "who holds office right now" claims: an office-holder title
+    AND a live time-sensitivity signal. _OFFICE_HOLDER_RE alone also matches bare
+    titles (king, queen, pope, chancellor, monarch) with no temporal marker, e.g.
+    "Angela Merkel was the chancellor of Germany" — a settled historical fact that
+    must not be starved down to the last 24h of results."""
+    return _is_office_holder_claim(claim) and _is_time_sensitive(claim)
+
+
 def _parse_date(value) -> date | None:
     if value is None:
         return None
@@ -317,7 +326,7 @@ async def search(
     # Hard-pin office-holder / "current X" claims to the day window: for "who
     # holds office right now", only the freshest evidence is authoritative.
     # Overrides whatever the model passed.
-    if _is_office_holder_claim(claim):
+    if _needs_day_window(claim):
         time_range = "day"
     hits = await web_search(
         query,

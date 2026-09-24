@@ -38,6 +38,19 @@ def test_office_holder_claim_detection():
     assert search._is_office_holder_claim("the eiffel tower is in paris") is False
 
 
+def test_day_window_requires_time_signal_not_just_a_title():
+    # Bare title words (king, queen, pope, chancellor, monarch) trip
+    # _is_office_holder_claim but carry no temporal marker — a settled historical
+    # fact like this must not be starved down to a 1-day search window.
+    assert search._is_office_holder_claim("Angela Merkel was the chancellor of Germany.") is True
+    assert search._is_time_sensitive("Angela Merkel was the chancellor of Germany.") is False
+    assert search._needs_day_window("Angela Merkel was the chancellor of Germany.") is False
+
+    # A live "who holds office right now" claim should still pin to the day window.
+    assert search._needs_day_window("who is the current chancellor of Germany") is True
+    assert search._needs_day_window("trump is the president of usa") is True
+
+
 def test_trim_old_evidence_keeps_only_latest():
     msgs = [
         {"role": "system", "content": "sys"},
