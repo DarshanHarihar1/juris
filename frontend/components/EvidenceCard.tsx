@@ -1,13 +1,6 @@
-const STANCE_COLOR: Record<string, string> = {
-  supports: "text-verdict-true",
-  refutes: "text-verdict-false",
-  mentions: "text-muted",
-  context: "text-verdict-misleading",
-};
-
 export function EvidenceCard({ ev }: { ev: Record<string, any> }) {
-  const stance = String(ev.stance ?? "");
-  const cred = Math.max(0, Math.min(1, Number(ev.credibility) || 0));
+  // credibility_score is 0-100 (see backend/app/services/credibility.py).
+  const cred = Math.max(0, Math.min(1, Number(ev.credibility_score) / 100 || 0));
   return (
     <a
       href={ev.url}
@@ -28,9 +21,6 @@ export function EvidenceCard({ ev }: { ev: Record<string, any> }) {
               />
             ))}
           </span>
-        </span>
-        <span className={`font-mono text-[11px] uppercase tracking-wide ${STANCE_COLOR[stance] ?? "text-muted"}`}>
-          {stance}
         </span>
       </div>
       {ev.title && <p className="mt-1 line-clamp-2 text-sm text-ink/80">{ev.title}</p>}

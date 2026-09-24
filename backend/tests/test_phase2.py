@@ -266,3 +266,14 @@ async def test_web_search_unwraps_google_redirect_urls(monkeypatch):
     assert rows[0]["url"] == "https://www.hindustantimes.com/india-news/dk-shivakumar-is-the-new-chief-minister-of-karnataka-10162319418868.html"
     assert rows[0]["domain"] == "hindustantimes.com"
     assert rows[0]["published_at"] == "2026-07-09"
+
+
+def test_evidence_row_carries_domain_credibility_score():
+    from app.services import credibility, search
+
+    hit = {"url": "https://www.reuters.com/x", "domain": "reuters.com", "title": "T"}
+    row = search._evidence_row(hit, "e1")
+    assert row["credibility_score"] == credibility.score_for("reuters.com")
+
+    unlisted = search._evidence_row({"url": "https://random-blog.example/x", "domain": "random-blog.example"}, "e1")
+    assert unlisted["credibility_score"] == credibility.TIER_SCORES[credibility.DEFAULT_TIER]
