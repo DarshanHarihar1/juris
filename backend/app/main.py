@@ -70,9 +70,9 @@ async def verify(body: VerifyBody):
     media_uri = body.content if body.type in ("url", "image") else None
     async with (await db.pool()).acquire() as con:
         submission_id = await con.fetchval(
-            """insert into submissions (channel, user_hash, media_type, raw_text, media_uri)
-               values ('web', 'web-anon', $1, $2, $3) returning id""",
-            body.type, raw_text, media_uri,
+            """insert into submissions (channel, user_hash, media_type, raw_text, media_uri, detected_lang)
+               values ('web', 'web-anon', $1, $2, $3, $4) returning id""",
+            body.type, raw_text, media_uri, body.lang_hint,
         )
     job_id = await jobs.enqueue(submission_id=submission_id)
     return {"job_id": str(job_id), "investigation_url": f"/investigation/{job_id}", "status": "queued"}

@@ -34,6 +34,23 @@ async def test_api_contract():
         VerifyBody(type="text", content="x" * 50_001)
 
 
+@needs_db
+async def test_verify_persists_lang_hint():
+    from app import db
+    from app.main import VerifyBody, verify
+
+    resp = await verify(VerifyBody(type="text", content="Test claim.", lang_hint="hi-IN"))
+    con = await (await db.pool()).acquire()
+    try:
+        row = await con.fetchrow(
+            "select s.detected_lang from submissions s join jobs j on j.submission_id = s.id where j.id = $1::uuid",
+            resp["job_id"],
+        )
+    finally:
+        await (await db.pool()).release(con)
+    assert row["detected_lang"] == "hi-IN"
+
+
 async def test_malformed_job_id_returns_404_not_500():
     from app.main import job_events, job_stream
 
