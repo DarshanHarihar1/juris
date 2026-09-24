@@ -286,7 +286,6 @@ async def _verify(job_id, claim, *, claim_id=None, lang: str = "en") -> SubClaim
     schemas = tools.schemas(TOOL_NAMES)
     today = date.today().isoformat()
     claim_text = _claim_text(claim)
-    claim_for_search = claim if not isinstance(claim, str) else claim
 
     messages: list[dict] = [
         {"role": "system", "content": VERIFY_PROMPT.format(
@@ -330,7 +329,7 @@ async def _verify(job_id, claim, *, claim_id=None, lang: str = "en") -> SubClaim
                 messages.append({"role": "user", "content": SCHEMA_RETRY.format(err=e)})
                 continue
             schema_retries = 0
-            if not _temporal_guard_ok(claim_for_search, verdict):
+            if not _temporal_guard_ok(claim, verdict):
                 temporal_rejects += 1
                 messages.append({"role": "user", "content": TEMPORAL_NUDGE})
                 if temporal_rejects >= 2:
@@ -386,7 +385,7 @@ async def _verify(job_id, claim, *, claim_id=None, lang: str = "en") -> SubClaim
         rows = await _search_tool(
             query,
             args.get("time_range"),
-            claim_for_search,
+            claim,
             len(evidence_log) + 1,
             langsmith_extra={"metadata": {"job_id": str(job_id) if job_id else None, "query": query}},
         )
@@ -403,7 +402,7 @@ async def _verify(job_id, claim, *, claim_id=None, lang: str = "en") -> SubClaim
         messages.append({"role": "user", "content": NUDGE_SEARCH_OR_SETTLE})
 
     final = await _force_verdict(messages, evidence_log, max(1.0, deadline - time.monotonic()))
-    if not _temporal_guard_ok(claim_for_search, final):
+    if not _temporal_guard_ok(claim, final):
         final = SubClaimVerdict(
             verdict="unverifiable",
             explanation=final.explanation or "Time-sensitive claim lacked retrieved evidence.",
